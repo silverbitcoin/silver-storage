@@ -219,7 +219,7 @@ impl ObjectStore {
             // Extract object ID from index key
             if key.len() >= 128 {
                 let object_id_bytes = &key[64..128];
-                let object_id = ObjectID::from_bytes(object_id_bytes)?;
+                let _object_id = ObjectID::from_bytes(object_id_bytes)?;
 
                 // Deserialize object ref from value
                 let object_ref: ObjectRef = bincode::deserialize(&value)?;
@@ -590,7 +590,7 @@ impl ObjectStore {
 mod tests {
     use super::*;
     use silver_core::object::ObjectType;
-    use silver_core::TransactionDigest;
+    use silver_core::{TransactionDigest, SequenceNumber};
     use tempfile::TempDir;
 
     fn create_test_store() -> (ObjectStore, TempDir) {

@@ -23,11 +23,17 @@ use std::sync::Arc;
 use tracing::{debug, error, info};
 
 /// Column family names
+/// Objects column family
 pub const CF_OBJECTS: &str = "objects";
+/// Owner index column family
 pub const CF_OWNER_INDEX: &str = "owner_index";
+/// Transactions column family
 pub const CF_TRANSACTIONS: &str = "transactions";
+/// Snapshots column family
 pub const CF_SNAPSHOTS: &str = "snapshots";
+/// Events column family
 pub const CF_EVENTS: &str = "events";
+/// Flexible attributes column family
 pub const CF_FLEXIBLE_ATTRIBUTES: &str = "flexible_attributes";
 
 /// All column family names
@@ -263,7 +269,7 @@ impl RocksDatabase {
     ///
     /// # Panics
     /// Panics if the column family doesn't exist (should never happen with our setup)
-    fn cf_handle(&self, name: &str) -> Arc<rocksdb::BoundColumnFamily> {
+    fn cf_handle<'a>(&'a self, name: &str) -> Arc<rocksdb::BoundColumnFamily<'a>> {
         self.db
             .cf_handle(name)
             .unwrap_or_else(|| panic!("Column family '{}' not found", name))
@@ -503,7 +509,7 @@ impl RocksDatabase {
     pub fn iter<'a>(
         &'a self,
         cf_name: &str,
-        mode: IteratorMode,
+        mode: IteratorMode<'a>,
     ) -> impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), Error>> + 'a {
         let cf = self.cf_handle(cf_name);
         self.db.iterator_cf(&cf, mode).map(|result| {

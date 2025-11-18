@@ -232,7 +232,7 @@ impl TransactionStore {
 mod tests {
     use super::*;
     use silver_core::transaction::TransactionExpiration;
-    use silver_core::{SilverAddress, TransactionData, TransactionKind, ObjectRef, ObjectID, SequenceNumber, Signature, SignatureScheme};
+    use silver_core::{SilverAddress, TransactionData, TransactionKind, ObjectRef, ObjectID, SequenceNumber, Signature, SignatureScheme, TransactionDigest};
     use tempfile::TempDir;
 
     fn create_test_store() -> (TransactionStore, TempDir) {
