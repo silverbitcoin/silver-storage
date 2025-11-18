@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use silver_core::ObjectID;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Attribute value types
 ///

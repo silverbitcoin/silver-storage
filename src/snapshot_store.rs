@@ -10,7 +10,7 @@ use crate::{
 use silver_core::consensus::SnapshotSequenceNumber;
 use silver_core::{Snapshot, SnapshotDigest};
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Snapshot store for blockchain checkpoints
 ///

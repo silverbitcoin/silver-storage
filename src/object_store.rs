@@ -11,7 +11,7 @@ use crate::{
     Error, Result,
 };
 use rocksdb::WriteBatch;
-use silver_core::{Object, ObjectID, ObjectRef, Owner, SequenceNumber, SilverAddress};
+use silver_core::{Object, ObjectID, ObjectRef, Owner, SilverAddress};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -351,6 +351,150 @@ impl ObjectStore {
     /// Get the total size of object storage in bytes
     pub fn get_storage_size(&self) -> Result<u64> {
         self.db.get_cf_size(CF_OBJECTS)
+    }
+
+    // ========== OPTIMIZATION: Batch Operations with Prefetching ==========
+
+    /// OPTIMIZATION: Batch get multiple objects
+    ///
+    /// More efficient than multiple individual get_object() calls.
+    /// Uses RocksDB's multi_get for better performance.
+    ///
+    /// # Arguments
+    /// * `object_ids` - Slice of object IDs to retrieve
+    ///
+    /// # Returns
+    /// Vector of optional objects in the same order as object_ids
+    pub fn batch_get_objects(&self, object_ids: &[ObjectID]) -> Result<Vec<Option<Object>>> {
+        if object_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        debug!("Batch fetching {} objects", object_ids.len());
+
+        // Create keys for batch get
+        let keys: Vec<Vec<u8>> = object_ids
+            .iter()
+            .map(|id| self.make_object_key(id))
+            .collect();
+
+        let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
+
+        // Use database batch_get
+        let results = self.db.batch_get(CF_OBJECTS, &key_refs)?;
+
+        // Deserialize results
+        let objects: Result<Vec<Option<Object>>> = results
+            .into_iter()
+            .map(|opt_bytes| {
+                match opt_bytes {
+                    Some(bytes) => {
+                        let object: Object = bincode::deserialize(&bytes)?;
+                        Ok(Some(object))
+                    }
+                    None => Ok(None),
+                }
+            })
+            .collect();
+
+        objects
+    }
+
+    /// OPTIMIZATION: Batch get with prefetching
+    ///
+    /// Fetches requested objects while prefetching additional objects
+    /// that are likely to be accessed soon.
+    ///
+    /// # Arguments
+    /// * `object_ids` - Object IDs to fetch immediately
+    /// * `prefetch_ids` - Object IDs to prefetch for future access
+    ///
+    /// # Returns
+    /// Vector of optional objects for the requested IDs
+    pub fn batch_get_with_prefetch(
+        &self,
+        object_ids: &[ObjectID],
+        prefetch_ids: &[ObjectID],
+    ) -> Result<Vec<Option<Object>>> {
+        // Start prefetching in background
+        if !prefetch_ids.is_empty() {
+            let prefetch_keys: Vec<Vec<u8>> = prefetch_ids
+                .iter()
+                .map(|id| self.make_object_key(id))
+                .collect();
+
+            let prefetch_key_refs: Vec<&[u8]> = prefetch_keys.iter().map(|k| k.as_slice()).collect();
+
+            // Trigger prefetch (this is a hint to RocksDB)
+            let _ = self.db.prefetch(CF_OBJECTS, &prefetch_key_refs);
+        }
+
+        // Fetch requested objects
+        self.batch_get_objects(object_ids)
+    }
+
+    /// OPTIMIZATION: Prefetch objects for future access
+    ///
+    /// Hints to the storage layer that these objects will be accessed soon.
+    /// This allows the database to prefetch them into cache asynchronously.
+    ///
+    /// # Arguments
+    /// * `object_ids` - Object IDs to prefetch
+    pub fn prefetch_objects(&self, object_ids: &[ObjectID]) -> Result<()> {
+        if object_ids.is_empty() {
+            return Ok(());
+        }
+
+        debug!("Prefetching {} objects", object_ids.len());
+
+        let keys: Vec<Vec<u8>> = object_ids
+            .iter()
+            .map(|id| self.make_object_key(id))
+            .collect();
+
+        let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
+
+        self.db.prefetch(CF_OBJECTS, &key_refs)
+    }
+
+    /// OPTIMIZATION: Batch get objects by owner with prefetching
+    ///
+    /// Efficiently retrieves all objects for an owner using the index,
+    /// with optional prefetching of related objects.
+    ///
+    /// # Arguments
+    /// * `owner` - The owner address
+    ///
+    /// # Returns
+    /// Vector of objects owned by the address
+    pub fn get_objects_by_owner_optimized(
+        &self,
+        owner: &SilverAddress,
+    ) -> Result<Vec<Object>> {
+        debug!("Optimized query for owner: {}", owner);
+
+        let prefix = self.make_owner_index_prefix(owner);
+        let mut object_ids = Vec::new();
+
+        // First pass: collect all object IDs
+        for result in self.db.iter_prefix(CF_OWNER_INDEX, &prefix) {
+            let (key, _) = result?;
+
+            if key.len() >= 128 {
+                let object_id_bytes = &key[64..128];
+                let _object_id = ObjectID::from_bytes(object_id_bytes)?;
+                object_ids.push(_object_id);
+            }
+        }
+
+        // Batch fetch all objects
+        let results = self.batch_get_objects(&object_ids)?;
+
+        // Filter out None values
+        let objects: Vec<Object> = results.into_iter().flatten().collect();
+
+        debug!("Found {} objects for owner {} (optimized)", objects.len(), owner);
+        Ok(objects)
     }
 
     // ========== Private Helper Methods ==========

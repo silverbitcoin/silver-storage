@@ -4,8 +4,7 @@
 //! for efficient querying by transaction, object, and event type.
 
 use crate::{
-    db::{RocksDatabase, CF_EVENTS},
-    Error, Result,
+    db::{RocksDatabase, CF_EVENTS}, Result,
 };
 use serde::{Deserialize, Serialize};
 use silver_core::{ObjectID, TransactionDigest};

@@ -4,13 +4,12 @@
 //! Transactions are indexed by digest for efficient retrieval.
 
 use crate::{
-    db::{RocksDatabase, CF_TRANSACTIONS},
-    Error, Result,
+    db::{RocksDatabase, CF_TRANSACTIONS}, Result,
 };
 use serde::{Deserialize, Serialize};
 use silver_core::{Transaction, TransactionDigest};
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Transaction execution effects
 ///

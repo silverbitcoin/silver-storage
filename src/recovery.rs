@@ -7,8 +7,7 @@
 //! - Database health checks and repair
 
 use crate::{
-    db::{RocksDatabase, CF_OBJECTS, CF_SNAPSHOTS, CF_TRANSACTIONS},
-    Error, Result,
+    db::{RocksDatabase, CF_OBJECTS, CF_SNAPSHOTS, CF_TRANSACTIONS}, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
