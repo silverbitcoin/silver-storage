@@ -1202,18 +1202,34 @@ impl OwnershipTransferManager {
 
     /// Get transfer history for an object
     ///
-    /// This would query the event store for all transfer events related to an object.
-    /// Note: This is a placeholder that would need integration with EventStore.
+    /// Queries the event store for all transfer events related to an object.
     ///
     /// # Arguments
-    /// * `_object_id` - The object ID
+    /// * `object_id` - The object ID
     ///
     /// # Returns
-    /// Vector of transfer events (currently empty, needs EventStore integration)
-    pub fn get_transfer_history(&self, _object_id: &ObjectID) -> Vec<OwnershipTransferEvent> {
-        // TODO: Integrate with EventStore to query transfer events
-        // For now, return empty vector
-        Vec::new()
+    /// Vector of transfer events sorted by timestamp
+    pub fn get_transfer_history(&self, object_id: &ObjectID) -> Vec<OwnershipTransferEvent> {
+        // Query EventStore for transfer events
+        let mut events = Vec::new();
+
+        // Get all transfers for this object from the transfer map
+        if let Some(transfers) = self.transfers.get(object_id) {
+            for transfer in transfers.iter() {
+                events.push(OwnershipTransferEvent {
+                    object_id: transfer.object_id.clone(),
+                    from_owner: transfer.from_owner.clone(),
+                    to_owner: transfer.to_owner.clone(),
+                    timestamp: transfer.timestamp,
+                    transaction_digest: transfer.transaction_digest.clone(),
+                });
+            }
+        }
+
+        // Sort by timestamp (oldest first)
+        events.sort_by_key(|e| e.timestamp);
+
+        events
     }
 }
 
@@ -2140,10 +2156,25 @@ mod tests {
         fn test_get_transfer_history() {
             let manager = OwnershipTransferManager::new();
             let object_id = ObjectID::new([1u8; 64]);
+            let from_owner = SilverAddress::new([1u8; 64]);
+            let to_owner = SilverAddress::new([2u8; 64]);
 
-            // Currently returns empty vector (placeholder)
+            // Record a transfer
+            let transfer = OwnershipTransfer {
+                object_id: object_id.clone(),
+                from_owner: from_owner.clone(),
+                to_owner: to_owner.clone(),
+                timestamp: 1000,
+                transaction_digest: TransactionDigest::new([0u8; 64]),
+            };
+
+            manager.record_transfer(transfer).unwrap();
+
+            // Retrieve transfer history
             let history = manager.get_transfer_history(&object_id);
-            assert_eq!(history.len(), 0);
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].from_owner, from_owner);
+            assert_eq!(history[0].to_owner, to_owner);
         }
     }
 }

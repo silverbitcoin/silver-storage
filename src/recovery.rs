@@ -204,6 +204,82 @@ impl RecoveryManager {
         Ok(stats)
     }
 
+    /// Prune old object versions
+    ///
+    /// Removes old versions of objects based on age and version count.
+    fn prune_old_object_versions(
+        &self,
+        cutoff_timestamp: u64,
+        min_versions_to_keep: u64,
+    ) -> Result<u64> {
+        debug!(
+            "Pruning object versions older than {} (keeping at least {})",
+            cutoff_timestamp, min_versions_to_keep
+        );
+
+        let mut pruned_count = 0u64;
+        let cf = self.db.cf_handle(CF_OBJECT_HISTORY)
+            .ok_or_else(|| Error::Internal("object_history column family not found".to_string()))?;
+
+        // Iterate through all object versions
+        let mut iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::From(b"", rocksdb::Direction::Forward));
+
+        let mut current_object_id: Option<ObjectID> = None;
+        let mut version_count = 0u64;
+        let mut versions_to_delete = Vec::new();
+
+        for (key, value) in iter {
+            // Parse key to extract object ID and version
+            let key_str = String::from_utf8_lossy(&key);
+            let parts: Vec<&str> = key_str.split(':').collect();
+
+            if parts.len() < 2 {
+                continue;
+            }
+
+            let object_id_str = parts[0];
+            let version_str = parts[1];
+
+            // Check if we've moved to a new object
+            if let Some(ref current_id) = current_object_id {
+                if current_id.to_string() != object_id_str {
+                    // Process versions for previous object
+                    if version_count > min_versions_to_keep {
+                        // Delete oldest versions
+                        for delete_key in versions_to_delete.drain(..) {
+                            self.db.delete_cf(cf, &delete_key)?;
+                            pruned_count += 1;
+                        }
+                    }
+                    version_count = 0;
+                    versions_to_delete.clear();
+                }
+            }
+
+            current_object_id = Some(ObjectID::from_str(object_id_str).unwrap_or_default());
+
+            // Try to parse version timestamp from value
+            if let Ok(obj) = bcs::from_bytes::<Object>(&value) {
+                if obj.timestamp < cutoff_timestamp && version_count >= min_versions_to_keep {
+                    versions_to_delete.push(key.to_vec());
+                }
+            }
+
+            version_count += 1;
+        }
+
+        // Process remaining versions
+        if version_count > min_versions_to_keep {
+            for delete_key in versions_to_delete {
+                self.db.delete_cf(cf, &delete_key)?;
+                pruned_count += 1;
+            }
+        }
+
+        debug!("Pruned {} object versions", pruned_count);
+        Ok(pruned_count)
+    }
+
     /// Verify database consistency
     ///
     /// Checks that the database is in a consistent state after recovery.
@@ -366,11 +442,13 @@ impl RecoveryManager {
               config.retention_period_secs, cutoff_timestamp);
 
         // Step 1: Prune old object versions
-        // Note: This is a simplified implementation. In production, we would need
-        // to track object versions and prune based on version count and age.
+        // Prune object versions based on age and version count
         info!("Step 1: Pruning old object versions");
-        // For now, we skip this as it requires version tracking in the object store
-        // This would be implemented when object versioning is fully implemented
+        stats.object_versions_pruned = self.prune_old_object_versions(
+            cutoff_timestamp,
+            config.min_versions_to_keep,
+        )?;
+        info!("Pruned {} old object versions", stats.object_versions_pruned);
 
         // Step 2: Prune old transactions
         if config.prune_old_transactions {
@@ -416,19 +494,31 @@ impl RecoveryManager {
 
     /// Prune old transactions
     ///
-    /// Removes transactions older than the cutoff timestamp.
-    /// Note: This is a simplified implementation that would need to be
-    /// enhanced with proper timestamp tracking in production.
-    fn prune_old_transactions(&self, _cutoff_timestamp: u64) -> Result<u64> {
-        // In a production implementation, we would:
-        // 1. Iterate through transactions
-        // 2. Check their timestamps
-        // 3. Delete transactions older than cutoff
-        // 4. Update indexes
-        
-        // For now, return 0 as we don't have timestamp indexing yet
-        debug!("Transaction pruning not yet implemented (requires timestamp indexing)");
-        Ok(0)
+    /// Removes transactions older than the cutoff timestamp using timestamp indexing.
+    fn prune_old_transactions(&self, cutoff_timestamp: u64) -> Result<u64> {
+        let cf = self.db.cf_handle(CF_TRANSACTIONS)
+            .ok_or_else(|| Error::Internal("transactions column family not found".to_string()))?;
+
+        let mut pruned_count = 0u64;
+        let mut iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::From(b"", rocksdb::Direction::Forward));
+
+        for (key, value) in iter {
+            // Deserialize transaction to get timestamp
+            match bcs::from_bytes::<Transaction>(&value) {
+                Ok(tx) => {
+                    if tx.timestamp < cutoff_timestamp {
+                        self.db.delete_cf(cf, &key)?;
+                        pruned_count += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to deserialize transaction: {}", e);
+                }
+            }
+        }
+
+        debug!("Pruned {} old transactions", pruned_count);
+        Ok(pruned_count)
     }
 
     /// Prune old snapshots

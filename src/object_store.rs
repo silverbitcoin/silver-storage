@@ -233,24 +233,47 @@ impl ObjectStore {
 
     /// Get object version history
     ///
-    /// Returns all versions of an object by querying the version history.
-    /// Note: This is a placeholder for future implementation when we add
-    /// version history tracking in a separate column family.
+    /// Returns all versions of an object by querying the version history
+    /// from the dedicated version history column family.
     ///
     /// # Arguments
     /// * `object_id` - The object ID
     ///
     /// # Returns
-    /// Vector of object versions (currently only returns current version)
+    /// Vector of object versions sorted by sequence number (oldest first)
     pub fn get_object_history(&self, object_id: &ObjectID) -> Result<Vec<Object>> {
         debug!("Retrieving object history for: {}", object_id);
 
-        // For now, just return the current version
-        // TODO: Implement full version history tracking
         let mut history = Vec::new();
-        if let Some(object) = self.get_object(object_id)? {
-            history.push(object);
+
+        // Query version history column family
+        let cf = self.db.cf_handle("object_history")
+            .ok_or_else(|| Error::Internal("object_history column family not found".to_string()))?;
+
+        // Create prefix key for this object ID
+        let prefix = format!("{}:", object_id);
+        let mut iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
+
+        // Iterate through all versions
+        for (key, value) in iter {
+            let key_str = String::from_utf8_lossy(&key);
+            
+            // Check if key still belongs to this object
+            if !key_str.starts_with(&prefix) {
+                break;
+            }
+
+            // Deserialize object
+            match bcs::from_bytes::<Object>(&value) {
+                Ok(obj) => history.push(obj),
+                Err(e) => {
+                    warn!("Failed to deserialize object version: {}", e);
+                }
+            }
         }
+
+        // Sort by sequence number (oldest first)
+        history.sort_by_key(|obj| obj.version.value());
 
         debug!("Retrieved {} versions for object {}", history.len(), object_id);
         Ok(history)

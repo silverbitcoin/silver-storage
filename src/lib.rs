@@ -22,13 +22,23 @@ pub mod event_store;
 pub mod attributes;
 pub mod cache;
 pub mod recovery;
+pub mod ownership;
+pub mod validator_store;
 
 pub use error::{Error, Result};
 pub use db::{RocksDatabase, CF_OBJECTS, CF_OWNER_INDEX, CF_TRANSACTIONS, CF_SNAPSHOTS, CF_EVENTS, CF_FLEXIBLE_ATTRIBUTES};
 pub use object_store::ObjectStore;
 pub use transaction_store::TransactionStore;
 pub use snapshot_store::SnapshotStore;
-pub use event_store::EventStore;
+pub use event_store::{EventStore, Event, EventType, EventID};
 pub use attributes::AttributeStore;
 pub use cache::ObjectCache;
 pub use recovery::{RecoveryManager, RecoveryStats, PruningConfig, PruningStats, DatabaseHealth};
+pub use ownership::{
+    OwnershipManager, SharedObjectManager, ImmutableObjectManager, WrappedObjectManager,
+    OwnershipTransferManager, OwnershipTransferEvent,
+};
+pub use validator_store::{
+    ValidatorStore, PersistedValidatorSet, PersistedStakingRecord,
+    PersistedDelegationRecord, PersistedRewardRecord,
+};
