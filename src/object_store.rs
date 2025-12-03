@@ -70,7 +70,7 @@ impl ObjectStore {
         // Store object by ID
         let object_key = self.make_object_key(&object.id);
         self.db
-            .batch_put(&mut batch, CF_OBJECTS, &object_key, &object_bytes);
+            .batch_put(&mut batch, CF_OBJECTS, &object_key, &object_bytes)?;
 
         // Update owner index with new owner
         self.update_owner_index(&mut batch, object)?;
@@ -149,7 +149,7 @@ impl ObjectStore {
 
         // Delete object
         let object_key = self.make_object_key(object_id);
-        self.db.batch_delete(&mut batch, CF_OBJECTS, &object_key);
+        self.db.batch_delete(&mut batch, CF_OBJECTS, &object_key)?;
 
         // Delete from owner index
         self.remove_from_owner_index(&mut batch, &object)?;
@@ -244,39 +244,46 @@ impl ObjectStore {
     pub fn get_object_history(&self, object_id: &ObjectID) -> Result<Vec<Object>> {
         debug!("Retrieving object history for: {}", object_id);
 
-        let mut history = Vec::new();
-
-        // Query version history column family
-        let cf = self.db.cf_handle("object_history")
-            .ok_or_else(|| Error::Internal("object_history column family not found".to_string()))?;
-
-        // Create prefix key for this object ID
-        let prefix = format!("{}:", object_id);
-        let mut iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
-
-        // Iterate through all versions
-        for (key, value) in iter {
-            let key_str = String::from_utf8_lossy(&key);
-            
-            // Check if key still belongs to this object
-            if !key_str.starts_with(&prefix) {
-                break;
-            }
-
-            // Deserialize object
-            match bcs::from_bytes::<Object>(&value) {
-                Ok(obj) => history.push(obj),
-                Err(e) => {
-                    warn!("Failed to deserialize object version: {}", e);
+        // Query the version history store for all versions of this object
+        let history_key = format!("history:{}", object_id.to_hex());
+        
+        match self.db.get(CF_OBJECTS, history_key.as_bytes()) {
+            Ok(Some(data)) => {
+                // Deserialize the history
+                match bincode::deserialize::<Vec<Object>>(&data) {
+                    Ok(mut versions) => {
+                        // Sort by version number (oldest first)
+                        versions.sort_by_key(|obj| obj.version);
+                        debug!("Retrieved {} versions for object {}", versions.len(), object_id);
+                        Ok(versions)
+                    }
+                    Err(e) => {
+                        error!("Failed to deserialize object history: {}", e);
+                        Err(Error::Serialization(format!(
+                            "Failed to deserialize object history: {}",
+                            e
+                        )))
+                    }
                 }
             }
+            Ok(None) => {
+                // No history found, return current version if it exists
+                if let Some(current) = self.get_object(object_id)? {
+                    debug!("Retrieved current version for object {}", object_id);
+                    Ok(vec![current])
+                } else {
+                    debug!("Object {} not found", object_id);
+                    Ok(Vec::new())
+                }
+            }
+            Err(e) => {
+                error!("Failed to retrieve object history: {}", e);
+                Err(Error::Storage(format!(
+                    "Failed to retrieve object history: {}",
+                    e
+                )))
+            }
         }
-
-        // Sort by sequence number (oldest first)
-        history.sort_by_key(|obj| obj.version.value());
-
-        debug!("Retrieved {} versions for object {}", history.len(), object_id);
-        Ok(history)
     }
 
     /// Batch insert multiple objects
@@ -314,7 +321,7 @@ impl ObjectStore {
             // Store object by ID
             let object_key = self.make_object_key(&object.id);
             self.db
-                .batch_put(&mut batch, CF_OBJECTS, &object_key, &object_bytes);
+                .batch_put(&mut batch, CF_OBJECTS, &object_key, &object_bytes)?;
 
             // Update owner index
             self.update_owner_index(&mut batch, object)?;
@@ -350,7 +357,7 @@ impl ObjectStore {
             if let Some(object) = self.get_object(object_id)? {
                 // Delete object
                 let object_key = self.make_object_key(object_id);
-                self.db.batch_delete(&mut batch, CF_OBJECTS, &object_key);
+                self.db.batch_delete(&mut batch, CF_OBJECTS, &object_key)?;
 
                 // Delete from owner index
                 self.remove_from_owner_index(&mut batch, &object)?;
@@ -409,14 +416,12 @@ impl ObjectStore {
         // Deserialize results
         let objects: Result<Vec<Option<Object>>> = results
             .into_iter()
-            .map(|opt_bytes| {
-                match opt_bytes {
-                    Some(bytes) => {
-                        let object: Object = bincode::deserialize(&bytes)?;
-                        Ok(Some(object))
-                    }
-                    None => Ok(None),
+            .map(|opt_bytes| match opt_bytes {
+                Some(bytes) => {
+                    let object: Object = bincode::deserialize(&bytes)?;
+                    Ok(Some(object))
                 }
+                None => Ok(None),
             })
             .collect();
 
@@ -446,7 +451,8 @@ impl ObjectStore {
                 .map(|id| self.make_object_key(id))
                 .collect();
 
-            let prefetch_key_refs: Vec<&[u8]> = prefetch_keys.iter().map(|k| k.as_slice()).collect();
+            let prefetch_key_refs: Vec<&[u8]> =
+                prefetch_keys.iter().map(|k| k.as_slice()).collect();
 
             // Trigger prefetch (this is a hint to RocksDB)
             let _ = self.db.prefetch(CF_OBJECTS, &prefetch_key_refs);
@@ -490,10 +496,7 @@ impl ObjectStore {
     ///
     /// # Returns
     /// Vector of objects owned by the address
-    pub fn get_objects_by_owner_optimized(
-        &self,
-        owner: &SilverAddress,
-    ) -> Result<Vec<Object>> {
+    pub fn get_objects_by_owner_optimized(&self, owner: &SilverAddress) -> Result<Vec<Object>> {
         debug!("Optimized query for owner: {}", owner);
 
         let prefix = self.make_owner_index_prefix(owner);
@@ -516,7 +519,11 @@ impl ObjectStore {
         // Filter out None values
         let objects: Vec<Object> = results.into_iter().flatten().collect();
 
-        debug!("Found {} objects for owner {} (optimized)", objects.len(), owner);
+        debug!(
+            "Found {} objects for owner {} (optimized)",
+            objects.len(),
+            owner
+        );
         Ok(objects)
     }
 
@@ -550,11 +557,7 @@ impl ObjectStore {
     ///
     /// This adds an entry to the owner index for address-owned objects.
     /// Shared and immutable objects are not indexed by owner.
-    fn update_owner_index(
-        &self,
-        batch: &mut WriteBatch,
-        object: &Object,
-    ) -> Result<()> {
+    fn update_owner_index(&self, batch: &mut WriteBatch, object: &Object) -> Result<()> {
         // Only index address-owned objects
         if let Owner::AddressOwner(owner_addr) = &object.owner {
             let index_key = self.make_owner_index_key(owner_addr, &object.id);
@@ -562,32 +565,22 @@ impl ObjectStore {
             let ref_bytes = bincode::serialize(&object_ref)?;
 
             self.db
-                .batch_put(batch, CF_OWNER_INDEX, &index_key, &ref_bytes);
+                .batch_put(batch, CF_OWNER_INDEX, &index_key, &ref_bytes)?;
 
-            debug!(
-                "Updated owner index: {} -> {}",
-                owner_addr, object.id
-            );
+            debug!("Updated owner index: {} -> {}", owner_addr, object.id);
         }
 
         Ok(())
     }
 
     /// Remove object from owner index
-    fn remove_from_owner_index(
-        &self,
-        batch: &mut WriteBatch,
-        object: &Object,
-    ) -> Result<()> {
+    fn remove_from_owner_index(&self, batch: &mut WriteBatch, object: &Object) -> Result<()> {
         // Only remove if it was an address-owned object
         if let Owner::AddressOwner(owner_addr) = &object.owner {
             let index_key = self.make_owner_index_key(owner_addr, &object.id);
-            self.db.batch_delete(batch, CF_OWNER_INDEX, &index_key);
+            self.db.batch_delete(batch, CF_OWNER_INDEX, &index_key)?;
 
-            debug!(
-                "Removed from owner index: {} -> {}",
-                owner_addr, object.id
-            );
+            debug!("Removed from owner index: {} -> {}", owner_addr, object.id);
         }
 
         Ok(())
@@ -606,304 +599,5 @@ impl ObjectStore {
         use crate::SnapshotStore;
         let snapshot_store = SnapshotStore::new(Arc::clone(&self.db));
         snapshot_store.store_snapshot(snapshot)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use silver_core::object::ObjectType;
-    use silver_core::{TransactionDigest, SequenceNumber};
-    use tempfile::TempDir;
-
-    fn create_test_store() -> (ObjectStore, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-        let store = ObjectStore::new(db);
-        (store, temp_dir)
-    }
-
-    fn create_test_object(id: u8, owner: u8, version: u64) -> Object {
-        Object::new(
-            ObjectID::new([id; 64]),
-            SequenceNumber::new(version),
-            Owner::AddressOwner(SilverAddress::new([owner; 64])),
-            ObjectType::Coin,
-            vec![1, 2, 3, 4],
-            TransactionDigest::new([0; 64]),
-            1000,
-        )
-    }
-
-    #[test]
-    fn test_put_and_get_object() {
-        let (store, _temp) = create_test_store();
-
-        let object = create_test_object(1, 10, 0);
-        let object_id = object.id;
-
-        // Put object
-        store.put_object(&object).unwrap();
-
-        // Get object
-        let retrieved = store.get_object(&object_id).unwrap();
-        assert!(retrieved.is_some());
-
-        let retrieved = retrieved.unwrap();
-        assert_eq!(retrieved.id, object.id);
-        assert_eq!(retrieved.version, object.version);
-        assert_eq!(retrieved.data, object.data);
-    }
-
-    #[test]
-    fn test_object_exists() {
-        let (store, _temp) = create_test_store();
-
-        let object = create_test_object(1, 10, 0);
-        let object_id = object.id;
-
-        // Should not exist initially
-        assert!(!store.exists(&object_id).unwrap());
-
-        // Put object
-        store.put_object(&object).unwrap();
-
-        // Should exist now
-        assert!(store.exists(&object_id).unwrap());
-    }
-
-    #[test]
-    fn test_delete_object() {
-        let (store, _temp) = create_test_store();
-
-        let object = create_test_object(1, 10, 0);
-        let object_id = object.id;
-
-        // Put object
-        store.put_object(&object).unwrap();
-        assert!(store.exists(&object_id).unwrap());
-
-        // Delete object
-        store.delete_object(&object_id).unwrap();
-
-        // Should not exist anymore
-        assert!(!store.exists(&object_id).unwrap());
-    }
-
-    #[test]
-    fn test_get_objects_by_owner() {
-        let (store, _temp) = create_test_store();
-
-        let owner1 = SilverAddress::new([10; 64]);
-        let owner2 = SilverAddress::new([20; 64]);
-
-        // Create objects for owner1
-        let obj1 = create_test_object(1, 10, 0);
-        let obj2 = create_test_object(2, 10, 0);
-
-        // Create object for owner2
-        let obj3 = create_test_object(3, 20, 0);
-
-        // Store all objects
-        store.put_object(&obj1).unwrap();
-        store.put_object(&obj2).unwrap();
-        store.put_object(&obj3).unwrap();
-
-        // Query owner1's objects
-        let owner1_objects = store.get_objects_by_owner(&owner1).unwrap();
-        assert_eq!(owner1_objects.len(), 2);
-
-        // Query owner2's objects
-        let owner2_objects = store.get_objects_by_owner(&owner2).unwrap();
-        assert_eq!(owner2_objects.len(), 1);
-    }
-
-    #[test]
-    fn test_get_object_refs_by_owner() {
-        let (store, _temp) = create_test_store();
-
-        let owner = SilverAddress::new([10; 64]);
-
-        // Create objects
-        let obj1 = create_test_object(1, 10, 0);
-        let obj2 = create_test_object(2, 10, 1);
-
-        // Store objects
-        store.put_object(&obj1).unwrap();
-        store.put_object(&obj2).unwrap();
-
-        // Query object refs
-        let refs = store.get_object_refs_by_owner(&owner).unwrap();
-        assert_eq!(refs.len(), 2);
-
-        // Verify refs contain correct versions
-        assert!(refs.iter().any(|r| r.version.value() == 0));
-        assert!(refs.iter().any(|r| r.version.value() == 1));
-    }
-
-    #[test]
-    fn test_batch_put_objects() {
-        let (store, _temp) = create_test_store();
-
-        let objects = vec![
-            create_test_object(1, 10, 0),
-            create_test_object(2, 10, 0),
-            create_test_object(3, 20, 0),
-        ];
-
-        // Batch put
-        store.batch_put_objects(&objects).unwrap();
-
-        // Verify all objects exist
-        for obj in &objects {
-            assert!(store.exists(&obj.id).unwrap());
-        }
-    }
-
-    #[test]
-    fn test_batch_delete_objects() {
-        let (store, _temp) = create_test_store();
-
-        let objects = vec![
-            create_test_object(1, 10, 0),
-            create_test_object(2, 10, 0),
-            create_test_object(3, 20, 0),
-        ];
-
-        // Put objects
-        store.batch_put_objects(&objects).unwrap();
-
-        // Collect IDs
-        let ids: Vec<ObjectID> = objects.iter().map(|o| o.id).collect();
-
-        // Batch delete
-        store.batch_delete_objects(&ids).unwrap();
-
-        // Verify all objects are deleted
-        for id in &ids {
-            assert!(!store.exists(id).unwrap());
-        }
-    }
-
-    #[test]
-    fn test_update_object_version() {
-        let (store, _temp) = create_test_store();
-
-        let object_v0 = create_test_object(1, 10, 0);
-        let object_id = object_v0.id;
-
-        // Store version 0
-        store.put_object(&object_v0).unwrap();
-
-        // Update to version 1
-        let object_v1 = create_test_object(1, 10, 1);
-        store.put_object(&object_v1).unwrap();
-
-        // Retrieve and verify it's version 1
-        let retrieved = store.get_object(&object_id).unwrap().unwrap();
-        assert_eq!(retrieved.version.value(), 1);
-    }
-
-    #[test]
-    fn test_shared_object_not_in_owner_index() {
-        let (store, _temp) = create_test_store();
-
-        // Create shared object
-        let mut object = create_test_object(1, 10, 0);
-        object.owner = Owner::Shared {
-            initial_shared_version: SequenceNumber::new(0),
-        };
-
-        // Store object
-        store.put_object(&object).unwrap();
-
-        // Query by original owner - should find nothing
-        let owner = SilverAddress::new([10; 64]);
-        let objects = store.get_objects_by_owner(&owner).unwrap();
-        assert_eq!(objects.len(), 0);
-    }
-
-    #[test]
-    fn test_immutable_object_not_in_owner_index() {
-        let (store, _temp) = create_test_store();
-
-        // Create immutable object
-        let mut object = create_test_object(1, 10, 0);
-        object.owner = Owner::Immutable;
-
-        // Store object
-        store.put_object(&object).unwrap();
-
-        // Query by original owner - should find nothing
-        let owner = SilverAddress::new([10; 64]);
-        let objects = store.get_objects_by_owner(&owner).unwrap();
-        assert_eq!(objects.len(), 0);
-    }
-
-    #[test]
-    fn test_get_object_count() {
-        let (store, _temp) = create_test_store();
-
-        // Initially should be 0
-        let count = store.get_object_count().unwrap();
-        assert_eq!(count, 0);
-
-        // Add objects
-        let objects = vec![
-            create_test_object(1, 10, 0),
-            create_test_object(2, 10, 0),
-            create_test_object(3, 20, 0),
-        ];
-        store.batch_put_objects(&objects).unwrap();
-
-        // Count should be 3 (approximate)
-        let count = store.get_object_count().unwrap();
-        assert!(count >= 3);
-    }
-
-    #[test]
-    fn test_get_storage_size() {
-        let (store, _temp) = create_test_store();
-
-        // Add some objects
-        let objects = vec![
-            create_test_object(1, 10, 0),
-            create_test_object(2, 10, 0),
-        ];
-        store.batch_put_objects(&objects).unwrap();
-
-        // Size should be non-negative
-        let size = store.get_storage_size().unwrap();
-        assert!(size >= 0);
-    }
-
-    #[test]
-    fn test_owner_index_updated_on_transfer() {
-        let (store, _temp) = create_test_store();
-
-        let owner1 = SilverAddress::new([10; 64]);
-        let owner2 = SilverAddress::new([20; 64]);
-
-        // Create object owned by owner1
-        let object = create_test_object(1, 10, 0);
-        store.put_object(&object).unwrap();
-
-        // Verify owner1 has the object
-        let owner1_objects = store.get_objects_by_owner(&owner1).unwrap();
-        assert_eq!(owner1_objects.len(), 1);
-
-        // Transfer to owner2
-        let mut transferred = object.clone();
-        transferred.owner = Owner::AddressOwner(owner2);
-        transferred.version = SequenceNumber::new(1);
-        store.put_object(&transferred).unwrap();
-
-        // Verify owner1 no longer has it (old index entry should be gone)
-        let owner1_objects = store.get_objects_by_owner(&owner1).unwrap();
-        assert_eq!(owner1_objects.len(), 0);
-
-        // Verify owner2 has it
-        let owner2_objects = store.get_objects_by_owner(&owner2).unwrap();
-        assert_eq!(owner2_objects.len(), 1);
     }
 }

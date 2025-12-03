@@ -13,32 +13,40 @@
 #![warn(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
-mod error;
-pub mod db;
-pub mod object_store;
-pub mod transaction_store;
-pub mod snapshot_store;
-pub mod event_store;
 pub mod attributes;
+pub mod block_store;
 pub mod cache;
-pub mod recovery;
+pub mod db;
+mod error;
+pub mod event_store;
+pub mod object_store;
 pub mod ownership;
+pub mod persistence;
+pub mod recovery;
+pub mod snapshot_store;
+pub mod transaction_store;
 pub mod validator_store;
 
-pub use error::{Error, Result};
-pub use db::{RocksDatabase, CF_OBJECTS, CF_OWNER_INDEX, CF_TRANSACTIONS, CF_SNAPSHOTS, CF_EVENTS, CF_FLEXIBLE_ATTRIBUTES};
-pub use object_store::ObjectStore;
-pub use transaction_store::TransactionStore;
-pub use snapshot_store::SnapshotStore;
-pub use event_store::{EventStore, Event, EventType, EventID};
 pub use attributes::AttributeStore;
+pub use block_store::{Block, BlockStore};
 pub use cache::ObjectCache;
-pub use recovery::{RecoveryManager, RecoveryStats, PruningConfig, PruningStats, DatabaseHealth};
+pub use db::{
+    RocksDatabase, CF_BLOCKS, CF_EVENTS, CF_FLEXIBLE_ATTRIBUTES, CF_OBJECTS, CF_OWNER_INDEX,
+    CF_SNAPSHOTS, CF_TRANSACTIONS,
+};
+pub use error::{Error, Result};
+pub use event_store::{Event, EventID, EventStore, EventType};
+pub use object_store::ObjectStore;
 pub use ownership::{
-    OwnershipManager, SharedObjectManager, ImmutableObjectManager, WrappedObjectManager,
-    OwnershipTransferManager, OwnershipTransferEvent,
+    ImmutableObjectManager, OwnershipManager, OwnershipTransferEvent, OwnershipTransferManager,
+    SharedObjectManager, WrappedObjectManager,
+};
+pub use recovery::{DatabaseHealth, PruningConfig, PruningStats, RecoveryManager, RecoveryStats};
+pub use snapshot_store::SnapshotStore;
+pub use transaction_store::{
+    ExecutionStatus, StoredTransaction, TransactionEffects, TransactionStore,
 };
 pub use validator_store::{
-    ValidatorStore, PersistedValidatorSet, PersistedStakingRecord,
-    PersistedDelegationRecord, PersistedRewardRecord,
+    PersistedDelegationRecord, PersistedRewardRecord, PersistedStakingRecord,
+    PersistedValidatorSet, ValidatorStore,
 };

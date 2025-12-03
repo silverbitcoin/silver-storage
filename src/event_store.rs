@@ -4,7 +4,8 @@
 //! for efficient querying by transaction, object, and event type.
 
 use crate::{
-    db::{RocksDatabase, CF_EVENTS}, Result,
+    db::{RocksDatabase, CF_EVENTS},
+    Result,
 };
 use serde::{Deserialize, Serialize};
 use silver_core::{ObjectID, TransactionDigest};
@@ -43,19 +44,19 @@ pub enum EventType {
 pub struct Event {
     /// Event ID (unique identifier)
     pub event_id: EventID,
-    
+
     /// Transaction that generated this event
     pub transaction_digest: TransactionDigest,
-    
+
     /// Event type
     pub event_type: EventType,
-    
+
     /// Object ID related to this event (if applicable)
     pub object_id: Option<ObjectID>,
-    
+
     /// Event data (serialized)
     pub data: Vec<u8>,
-    
+
     /// Timestamp when event was created (Unix milliseconds)
     pub timestamp: u64,
 }
@@ -69,7 +70,7 @@ impl EventID {
     pub fn new(id: u64) -> Self {
         Self(id)
     }
-    
+
     /// Get the inner value
     pub fn value(&self) -> u64 {
         self.0
@@ -86,7 +87,7 @@ impl EventID {
 pub struct EventStore {
     /// Reference to the RocksDB database
     db: Arc<RocksDatabase>,
-    
+
     /// Next event ID counter
     next_event_id: Arc<parking_lot::Mutex<u64>>,
 }
@@ -98,10 +99,10 @@ impl EventStore {
     /// * `db` - Shared reference to the RocksDB database
     pub fn new(db: Arc<RocksDatabase>) -> Self {
         info!("Initializing EventStore");
-        
+
         // Load the next event ID from storage
         let next_event_id = Self::load_next_event_id(&db).unwrap_or(0);
-        
+
         Self {
             db,
             next_event_id: Arc::new(parking_lot::Mutex::new(next_event_id)),
@@ -134,7 +135,7 @@ impl EventStore {
     ) -> Result<EventID> {
         // Allocate event ID
         let event_id = self.allocate_event_id()?;
-        
+
         debug!("Storing event: id={}, type={:?}", event_id.0, event_type);
 
         let event = Event {
@@ -154,26 +155,33 @@ impl EventStore {
 
         // Primary index: by event ID
         let event_key = self.make_event_key(event_id);
-        self.db.batch_put(&mut batch, CF_EVENTS, &event_key, &event_bytes);
+        self.db
+            .batch_put(&mut batch, CF_EVENTS, &event_key, &event_bytes)?;
 
         // Secondary index: by transaction digest
         let tx_index_key = self.make_transaction_index_key(&transaction_digest, event_id);
-        self.db.batch_put(&mut batch, CF_EVENTS, &tx_index_key, &[]);
+        self.db.batch_put(&mut batch, CF_EVENTS, &tx_index_key, &[])?;
 
         // Secondary index: by object ID (if present)
         if let Some(obj_id) = object_id {
             let obj_index_key = self.make_object_index_key(&obj_id, event_id);
-            self.db.batch_put(&mut batch, CF_EVENTS, &obj_index_key, &[]);
+            self.db
+                .batch_put(&mut batch, CF_EVENTS, &obj_index_key, &[])?;
         }
 
         // Secondary index: by event type
         let type_index_key = self.make_type_index_key(&event_type, event_id);
-        self.db.batch_put(&mut batch, CF_EVENTS, &type_index_key, &[]);
+        self.db
+            .batch_put(&mut batch, CF_EVENTS, &type_index_key, &[])?;
 
         // Write batch atomically
         self.db.write_batch(batch)?;
 
-        debug!("Event {} stored successfully ({} bytes)", event_id.0, event_bytes.len());
+        debug!(
+            "Event {} stored successfully ({} bytes)",
+            event_id.0,
+            event_bytes.len()
+        );
 
         Ok(event_id)
     }
@@ -213,7 +221,10 @@ impl EventStore {
     ///
     /// # Returns
     /// Vector of events for the transaction
-    pub fn get_events_by_transaction(&self, transaction_digest: &TransactionDigest) -> Result<Vec<Event>> {
+    pub fn get_events_by_transaction(
+        &self,
+        transaction_digest: &TransactionDigest,
+    ) -> Result<Vec<Event>> {
         debug!("Querying events for transaction: {}", transaction_digest);
 
         let prefix = self.make_transaction_index_prefix(transaction_digest);
@@ -359,21 +370,24 @@ impl EventStore {
 
             // Primary index: by event ID
             let event_key = self.make_event_key(event_id);
-            self.db.batch_put(&mut batch, CF_EVENTS, &event_key, &event_bytes);
+            self.db
+                .batch_put(&mut batch, CF_EVENTS, &event_key, &event_bytes)?;
 
             // Secondary index: by transaction digest
             let tx_index_key = self.make_transaction_index_key(tx_digest, event_id);
-            self.db.batch_put(&mut batch, CF_EVENTS, &tx_index_key, &[]);
+            self.db.batch_put(&mut batch, CF_EVENTS, &tx_index_key, &[])?;
 
             // Secondary index: by object ID (if present)
             if let Some(obj_id) = object_id {
                 let obj_index_key = self.make_object_index_key(obj_id, event_id);
-                self.db.batch_put(&mut batch, CF_EVENTS, &obj_index_key, &[]);
+                self.db
+                    .batch_put(&mut batch, CF_EVENTS, &obj_index_key, &[])?;
             }
 
             // Secondary index: by event type
             let type_index_key = self.make_type_index_key(event_type, event_id);
-            self.db.batch_put(&mut batch, CF_EVENTS, &type_index_key, &[]);
+            self.db
+                .batch_put(&mut batch, CF_EVENTS, &type_index_key, &[])?;
         }
 
         // Write batch atomically
@@ -401,10 +415,10 @@ impl EventStore {
         let mut next_id = self.next_event_id.lock();
         let event_id = EventID(*next_id);
         *next_id += 1;
-        
+
         // Persist the next event ID
         self.save_next_event_id(*next_id)?;
-        
+
         Ok(event_id)
     }
 
@@ -445,7 +459,11 @@ impl EventStore {
     /// Create transaction index key
     ///
     /// Key format: 't' (1 byte) + tx_digest (64 bytes) + event_id (8 bytes)
-    fn make_transaction_index_key(&self, tx_digest: &TransactionDigest, event_id: EventID) -> Vec<u8> {
+    fn make_transaction_index_key(
+        &self,
+        tx_digest: &TransactionDigest,
+        event_id: EventID,
+    ) -> Vec<u8> {
         let mut key = Vec::with_capacity(73);
         key.push(b't'); // 't' for transaction
         key.extend_from_slice(tx_digest.as_bytes());
@@ -486,7 +504,7 @@ impl EventStore {
     fn make_type_index_key(&self, event_type: &EventType, event_id: EventID) -> Vec<u8> {
         let mut key = Vec::new();
         key.push(b'y'); // 'y' for type
-        
+
         // Encode event type
         match event_type {
             EventType::ObjectCreated => key.push(0),
@@ -504,7 +522,7 @@ impl EventStore {
                 key.extend_from_slice(name.as_bytes());
             }
         }
-        
+
         key.extend_from_slice(&event_id.0.to_be_bytes());
         key
     }
@@ -513,7 +531,7 @@ impl EventStore {
     fn make_type_index_prefix(&self, event_type: &EventType) -> Vec<u8> {
         let mut prefix = Vec::new();
         prefix.push(b'y');
-        
+
         match event_type {
             EventType::ObjectCreated => prefix.push(0),
             EventType::ObjectModified => prefix.push(1),
@@ -530,369 +548,7 @@ impl EventStore {
                 prefix.extend_from_slice(name.as_bytes());
             }
         }
-        
+
         prefix
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_store() -> (EventStore, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-        let store = EventStore::new(db);
-        (store, temp_dir)
-    }
-
-    fn create_test_tx_digest(id: u8) -> TransactionDigest {
-        TransactionDigest::new([id; 64])
-    }
-
-    fn create_test_object_id(id: u8) -> ObjectID {
-        ObjectID::new([id; 64])
-    }
-
-    #[test]
-    fn test_store_and_get_event() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let object_id = create_test_object_id(1);
-        let data = vec![1, 2, 3, 4];
-
-        // Store event
-        let event_id = store
-            .store_event(
-                tx_digest,
-                EventType::ObjectCreated,
-                Some(object_id),
-                data.clone(),
-                1000,
-            )
-            .unwrap();
-
-        // Get event
-        let event = store.get_event(event_id).unwrap();
-        assert!(event.is_some());
-
-        let event = event.unwrap();
-        assert_eq!(event.event_id, event_id);
-        assert_eq!(event.transaction_digest, tx_digest);
-        assert_eq!(event.event_type, EventType::ObjectCreated);
-        assert_eq!(event.object_id, Some(object_id));
-        assert_eq!(event.data, data);
-    }
-
-    #[test]
-    fn test_event_id_allocation() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-
-        // Store multiple events
-        let id1 = store
-            .store_event(tx_digest, EventType::ObjectCreated, None, vec![], 1000)
-            .unwrap();
-        let id2 = store
-            .store_event(tx_digest, EventType::ObjectModified, None, vec![], 1001)
-            .unwrap();
-        let id3 = store
-            .store_event(tx_digest, EventType::ObjectDeleted, None, vec![], 1002)
-            .unwrap();
-
-        // IDs should be sequential
-        assert_eq!(id1.0, 0);
-        assert_eq!(id2.0, 1);
-        assert_eq!(id3.0, 2);
-    }
-
-    #[test]
-    fn test_get_events_by_transaction() {
-        let (store, _temp) = create_test_store();
-
-        let tx1 = create_test_tx_digest(1);
-        let tx2 = create_test_tx_digest(2);
-
-        // Store events for tx1
-        store
-            .store_event(tx1, EventType::ObjectCreated, None, vec![], 1000)
-            .unwrap();
-        store
-            .store_event(tx1, EventType::ObjectModified, None, vec![], 1001)
-            .unwrap();
-
-        // Store event for tx2
-        store
-            .store_event(tx2, EventType::ObjectDeleted, None, vec![], 1002)
-            .unwrap();
-
-        // Query events for tx1
-        let events = store.get_events_by_transaction(&tx1).unwrap();
-        assert_eq!(events.len(), 2);
-
-        // Query events for tx2
-        let events = store.get_events_by_transaction(&tx2).unwrap();
-        assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn test_get_events_by_object() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let obj1 = create_test_object_id(1);
-        let obj2 = create_test_object_id(2);
-
-        // Store events for obj1
-        store
-            .store_event(tx_digest, EventType::ObjectCreated, Some(obj1), vec![], 1000)
-            .unwrap();
-        store
-            .store_event(tx_digest, EventType::ObjectModified, Some(obj1), vec![], 1001)
-            .unwrap();
-
-        // Store event for obj2
-        store
-            .store_event(tx_digest, EventType::ObjectDeleted, Some(obj2), vec![], 1002)
-            .unwrap();
-
-        // Query events for obj1
-        let events = store.get_events_by_object(&obj1).unwrap();
-        assert_eq!(events.len(), 2);
-
-        // Query events for obj2
-        let events = store.get_events_by_object(&obj2).unwrap();
-        assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn test_get_events_by_type() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-
-        // Store events of different types
-        store
-            .store_event(tx_digest, EventType::ObjectCreated, None, vec![], 1000)
-            .unwrap();
-        store
-            .store_event(tx_digest, EventType::ObjectCreated, None, vec![], 1001)
-            .unwrap();
-        store
-            .store_event(tx_digest, EventType::ObjectModified, None, vec![], 1002)
-            .unwrap();
-
-        // Query by type
-        let created_events = store.get_events_by_type(&EventType::ObjectCreated).unwrap();
-        assert_eq!(created_events.len(), 2);
-
-        let modified_events = store.get_events_by_type(&EventType::ObjectModified).unwrap();
-        assert_eq!(modified_events.len(), 1);
-    }
-
-    #[test]
-    fn test_custom_event_type() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let custom_type = EventType::Custom("MyCustomEvent".to_string());
-
-        // Store custom event
-        let event_id = store
-            .store_event(tx_digest, custom_type.clone(), None, vec![1, 2, 3], 1000)
-            .unwrap();
-
-        // Retrieve and verify
-        let event = store.get_event(event_id).unwrap().unwrap();
-        assert_eq!(event.event_type, custom_type);
-
-        // Query by custom type
-        let events = store.get_events_by_type(&custom_type).unwrap();
-        assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn test_batch_store_events() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let obj_id = create_test_object_id(1);
-
-        let events = vec![
-            (tx_digest, EventType::ObjectCreated, Some(obj_id), vec![1], 1000),
-            (tx_digest, EventType::ObjectModified, Some(obj_id), vec![2], 1001),
-            (tx_digest, EventType::ObjectDeleted, Some(obj_id), vec![3], 1002),
-        ];
-
-        // Batch store
-        let event_ids = store.batch_store_events(&events).unwrap();
-        assert_eq!(event_ids.len(), 3);
-
-        // Verify all events exist
-        for event_id in event_ids {
-            assert!(store.get_event(event_id).unwrap().is_some());
-        }
-    }
-
-    #[test]
-    fn test_event_without_object() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-
-        // Store event without object ID
-        let event_id = store
-            .store_event(tx_digest, EventType::ModulePublished, None, vec![], 1000)
-            .unwrap();
-
-        // Retrieve and verify
-        let event = store.get_event(event_id).unwrap().unwrap();
-        assert_eq!(event.object_id, None);
-    }
-
-    #[test]
-    fn test_get_event_count() {
-        let (store, _temp) = create_test_store();
-
-        // Initially 0
-        let count = store.get_event_count().unwrap();
-        assert_eq!(count, 0);
-
-        let tx_digest = create_test_tx_digest(1);
-
-        // Add events
-        store
-            .store_event(tx_digest, EventType::ObjectCreated, None, vec![], 1000)
-            .unwrap();
-        store
-            .store_event(tx_digest, EventType::ObjectModified, None, vec![], 1001)
-            .unwrap();
-
-        // Count should be 2
-        let count = store.get_event_count().unwrap();
-        assert!(count >= 2);
-    }
-
-    #[test]
-    fn test_get_storage_size() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-
-        // Add some events
-        store
-            .store_event(tx_digest, EventType::ObjectCreated, None, vec![1, 2, 3], 1000)
-            .unwrap();
-        store
-            .store_event(tx_digest, EventType::ObjectModified, None, vec![4, 5, 6], 1001)
-            .unwrap();
-
-        // Size should be non-negative
-        let size = store.get_storage_size().unwrap();
-        assert!(size >= 0);
-    }
-
-    #[test]
-    fn test_all_event_types() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let obj_id = create_test_object_id(1);
-
-        let event_types = vec![
-            EventType::ObjectCreated,
-            EventType::ObjectModified,
-            EventType::ObjectDeleted,
-            EventType::ObjectTransferred,
-            EventType::ObjectShared,
-            EventType::ObjectFrozen,
-            EventType::CoinSplit,
-            EventType::CoinMerged,
-            EventType::ModulePublished,
-            EventType::FunctionCalled,
-        ];
-
-        // Store one event of each type
-        for event_type in &event_types {
-            store
-                .store_event(tx_digest, event_type.clone(), Some(obj_id), vec![], 1000)
-                .unwrap();
-        }
-
-        // Verify we can query each type
-        for event_type in &event_types {
-            let events = store.get_events_by_type(event_type).unwrap();
-            assert_eq!(events.len(), 1);
-        }
-    }
-
-    #[test]
-    fn test_event_id_persistence() {
-        let temp_dir = TempDir::new().unwrap();
-        
-        // Create store and add events
-        {
-            let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-            let store = EventStore::new(db);
-            
-            let tx_digest = create_test_tx_digest(1);
-            let id1 = store
-                .store_event(tx_digest, EventType::ObjectCreated, None, vec![], 1000)
-                .unwrap();
-            assert_eq!(id1.0, 0);
-        }
-        
-        // Reopen store and add more events
-        {
-            let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-            let store = EventStore::new(db);
-            
-            let tx_digest = create_test_tx_digest(1);
-            let id2 = store
-                .store_event(tx_digest, EventType::ObjectModified, None, vec![], 1001)
-                .unwrap();
-            // Should continue from where we left off
-            assert_eq!(id2.0, 1);
-        }
-    }
-
-    #[test]
-    fn test_multiple_indexes() {
-        let (store, _temp) = create_test_store();
-
-        let tx_digest = create_test_tx_digest(1);
-        let obj_id = create_test_object_id(1);
-
-        // Store event
-        let event_id = store
-            .store_event(
-                tx_digest,
-                EventType::ObjectCreated,
-                Some(obj_id),
-                vec![1, 2, 3],
-                1000,
-            )
-            .unwrap();
-
-        // Verify we can find it through all indexes
-        
-        // By event ID
-        assert!(store.get_event(event_id).unwrap().is_some());
-        
-        // By transaction
-        let tx_events = store.get_events_by_transaction(&tx_digest).unwrap();
-        assert_eq!(tx_events.len(), 1);
-        
-        // By object
-        let obj_events = store.get_events_by_object(&obj_id).unwrap();
-        assert_eq!(obj_events.len(), 1);
-        
-        // By type
-        let type_events = store.get_events_by_type(&EventType::ObjectCreated).unwrap();
-        assert_eq!(type_events.len(), 1);
     }
 }

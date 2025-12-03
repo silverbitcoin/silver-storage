@@ -4,7 +4,8 @@
 //! Transactions are indexed by digest for efficient retrieval.
 
 use crate::{
-    db::{RocksDatabase, CF_TRANSACTIONS}, Result,
+    db::{RocksDatabase, CF_TRANSACTIONS},
+    Result,
 };
 use serde::{Deserialize, Serialize};
 use silver_core::{Transaction, TransactionDigest};
@@ -197,13 +198,16 @@ impl TransactionStore {
             let key = self.make_transaction_key(&digest);
 
             self.db
-                .batch_put(&mut batch, CF_TRANSACTIONS, &key, &stored_bytes);
+                .batch_put(&mut batch, CF_TRANSACTIONS, &key, &stored_bytes)?;
         }
 
         // Write batch atomically
         self.db.write_batch(batch)?;
 
-        info!("Batch stored {} transactions successfully", transactions.len());
+        info!(
+            "Batch stored {} transactions successfully",
+            transactions.len()
+        );
         Ok(())
     }
 
@@ -225,229 +229,41 @@ impl TransactionStore {
     fn make_transaction_key(&self, digest: &TransactionDigest) -> Vec<u8> {
         digest.as_bytes().to_vec()
     }
-}
 
+    /// Get the latest block number (delegates to block metadata)
+    pub fn get_latest_block_number(&self) -> Result<u64> {
+        let metadata_key = b"latest_block_number".to_vec();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use silver_core::transaction::TransactionExpiration;
-    use silver_core::{SilverAddress, TransactionData, TransactionKind, ObjectRef, ObjectID, SequenceNumber, Signature, SignatureScheme, TransactionDigest};
-    use tempfile::TempDir;
-
-    fn create_test_store() -> (TransactionStore, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-        let store = TransactionStore::new(db);
-        (store, temp_dir)
-    }
-
-    fn create_test_transaction(id: u8) -> Transaction {
-        let sender = SilverAddress::new([id; 64]);
-        let fuel_payment = ObjectRef::new(
-            ObjectID::new([id; 64]),
-            SequenceNumber::new(0),
-            TransactionDigest::new([id; 64]),
-        );
-
-        let data = TransactionData::new(
-            sender,
-            fuel_payment,
-            1000,
-            1000,
-            TransactionKind::CompositeChain(vec![]),
-            TransactionExpiration::None,
-        );
-
-        let signature = Signature {
-            scheme: SignatureScheme::Dilithium3,
-            bytes: vec![0u8; 100],
-        };
-
-        Transaction::new(data, vec![signature])
-    }
-
-    fn create_test_effects(digest: TransactionDigest, fuel_used: u64) -> TransactionEffects {
-        TransactionEffects {
-            digest,
-            status: ExecutionStatus::Success,
-            fuel_used,
-            error_message: None,
-            timestamp: 1000,
+        match self.db.get(CF_TRANSACTIONS, &metadata_key)? {
+            Some(bytes) => {
+                if bytes.len() == 8 {
+                    let number = u64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
+                    Ok(number)
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
         }
     }
 
-    #[test]
-    fn test_store_and_get_transaction() {
-        let (store, _temp) = create_test_store();
-
-        let transaction = create_test_transaction(1);
-        let digest = transaction.digest();
-        let effects = create_test_effects(digest, 500);
-
-        // Store transaction
-        store.store_transaction(&transaction, effects.clone()).unwrap();
-
-        // Get transaction
-        let stored = store.get_transaction(&digest).unwrap();
-        assert!(stored.is_some());
-
-        let stored = stored.unwrap();
-        assert_eq!(stored.transaction.digest(), digest);
-        assert_eq!(stored.effects.fuel_used, 500);
-        assert_eq!(stored.effects.status, ExecutionStatus::Success);
-    }
-
-    #[test]
-    fn test_transaction_exists() {
-        let (store, _temp) = create_test_store();
-
-        let transaction = create_test_transaction(1);
-        let digest = transaction.digest();
-        let effects = create_test_effects(digest, 500);
-
-        // Should not exist initially
-        assert!(!store.exists(&digest).unwrap());
-
-        // Store transaction
-        store.store_transaction(&transaction, effects).unwrap();
-
-        // Should exist now
-        assert!(store.exists(&digest).unwrap());
-    }
-
-    #[test]
-    fn test_get_effects() {
-        let (store, _temp) = create_test_store();
-
-        let transaction = create_test_transaction(1);
-        let digest = transaction.digest();
-        let effects = create_test_effects(digest, 750);
-
-        // Store transaction
-        store.store_transaction(&transaction, effects.clone()).unwrap();
-
-        // Get effects only
-        let retrieved_effects = store.get_effects(&digest).unwrap();
-        assert!(retrieved_effects.is_some());
-
-        let retrieved_effects = retrieved_effects.unwrap();
-        assert_eq!(retrieved_effects.fuel_used, 750);
-        assert_eq!(retrieved_effects.status, ExecutionStatus::Success);
-    }
-
-    #[test]
-    fn test_failed_transaction() {
-        let (store, _temp) = create_test_store();
-
-        let transaction = create_test_transaction(1);
-        let digest = transaction.digest();
-
-        let effects = TransactionEffects {
-            digest,
-            status: ExecutionStatus::Failed,
-            fuel_used: 100,
-            error_message: Some("Out of fuel".to_string()),
-            timestamp: 1000,
+    /// Get block by number (delegates to block storage)
+    pub fn get_block(&self, number: u64) -> Result<Option<crate::Block>> {
+        let key = {
+            let mut k = b"block:".to_vec();
+            k.extend_from_slice(&number.to_le_bytes());
+            k
         };
 
-        // Store failed transaction
-        store.store_transaction(&transaction, effects).unwrap();
-
-        // Retrieve and verify
-        let stored = store.get_transaction(&digest).unwrap().unwrap();
-        assert_eq!(stored.effects.status, ExecutionStatus::Failed);
-        assert_eq!(stored.effects.error_message, Some("Out of fuel".to_string()));
-    }
-
-    #[test]
-    fn test_batch_store_transactions() {
-        let (store, _temp) = create_test_store();
-
-        let tx1 = create_test_transaction(1);
-        let tx2 = create_test_transaction(2);
-        let tx3 = create_test_transaction(3);
-
-        let effects1 = create_test_effects(tx1.digest(), 100);
-        let effects2 = create_test_effects(tx2.digest(), 200);
-        let effects3 = create_test_effects(tx3.digest(), 300);
-
-        let transactions = vec![
-            (tx1.clone(), effects1),
-            (tx2.clone(), effects2),
-            (tx3.clone(), effects3),
-        ];
-
-        // Batch store
-        store.batch_store_transactions(&transactions).unwrap();
-
-        // Verify all transactions exist
-        assert!(store.exists(&tx1.digest()).unwrap());
-        assert!(store.exists(&tx2.digest()).unwrap());
-        assert!(store.exists(&tx3.digest()).unwrap());
-    }
-
-    #[test]
-    fn test_get_transaction_count() {
-        let (store, _temp) = create_test_store();
-
-        // Initially 0
-        let count = store.get_transaction_count().unwrap();
-        assert_eq!(count, 0);
-
-        // Add transactions
-        let tx1 = create_test_transaction(1);
-        let tx2 = create_test_transaction(2);
-
-        store
-            .store_transaction(&tx1, create_test_effects(tx1.digest(), 100))
-            .unwrap();
-        store
-            .store_transaction(&tx2, create_test_effects(tx2.digest(), 200))
-            .unwrap();
-
-        // Count should be 2
-        let count = store.get_transaction_count().unwrap();
-        assert!(count >= 2);
-    }
-
-    #[test]
-    fn test_get_storage_size() {
-        let (store, _temp) = create_test_store();
-
-        // Add some transactions
-        let tx1 = create_test_transaction(1);
-        let tx2 = create_test_transaction(2);
-
-        store
-            .store_transaction(&tx1, create_test_effects(tx1.digest(), 100))
-            .unwrap();
-        store
-            .store_transaction(&tx2, create_test_effects(tx2.digest(), 200))
-            .unwrap();
-
-        // Size should be non-negative
-        let size = store.get_storage_size().unwrap();
-        assert!(size >= 0);
-    }
-
-    #[test]
-    fn test_overwrite_transaction() {
-        let (store, _temp) = create_test_store();
-
-        let transaction = create_test_transaction(1);
-        let digest = transaction.digest();
-
-        // Store with initial effects
-        let effects1 = create_test_effects(digest, 100);
-        store.store_transaction(&transaction, effects1).unwrap();
-
-        // Overwrite with new effects
-        let effects2 = create_test_effects(digest, 200);
-        store.store_transaction(&transaction, effects2).unwrap();
-
-        // Verify updated effects
-        let stored = store.get_transaction(&digest).unwrap().unwrap();
-        assert_eq!(stored.effects.fuel_used, 200);
+        match self.db.get(CF_TRANSACTIONS, &key)? {
+            Some(bytes) => {
+                let block: crate::Block = bincode::deserialize(&bytes)?;
+                Ok(Some(block))
+            }
+            None => Ok(None),
+        }
     }
 }

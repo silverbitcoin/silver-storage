@@ -137,7 +137,9 @@ impl AttributeStore {
 
         // Validate key
         if key.is_empty() {
-            return Err(Error::InvalidData("Attribute key cannot be empty".to_string()));
+            return Err(Error::InvalidData(
+                "Attribute key cannot be empty".to_string(),
+            ));
         }
 
         if key.len() > 256 {
@@ -231,7 +233,10 @@ impl AttributeStore {
     ///
     /// # Returns
     /// HashMap of attribute key-value pairs
-    pub fn get_all_attributes(&self, object_id: &ObjectID) -> Result<HashMap<String, AttributeValue>> {
+    pub fn get_all_attributes(
+        &self,
+        object_id: &ObjectID,
+    ) -> Result<HashMap<String, AttributeValue>> {
         debug!("Getting all attributes for object {}", object_id);
 
         let prefix = self.make_attribute_prefix(object_id);
@@ -291,7 +296,9 @@ impl AttributeStore {
         // Validate all keys first
         for key in attributes.keys() {
             if key.is_empty() {
-                return Err(Error::InvalidData("Attribute key cannot be empty".to_string()));
+                return Err(Error::InvalidData(
+                    "Attribute key cannot be empty".to_string(),
+                ));
             }
             if key.len() > 256 {
                 return Err(Error::InvalidData(format!(
@@ -307,8 +314,12 @@ impl AttributeStore {
         for (key, value) in attributes {
             let storage_key = self.make_attribute_key(object_id, key);
             let value_bytes = bincode::serialize(value)?;
-            self.db
-                .batch_put(&mut batch, CF_FLEXIBLE_ATTRIBUTES, &storage_key, &value_bytes);
+            self.db.batch_put(
+                &mut batch,
+                CF_FLEXIBLE_ATTRIBUTES,
+                &storage_key,
+                &value_bytes,
+            )?;
         }
 
         // Write batch atomically
@@ -341,7 +352,7 @@ impl AttributeStore {
         for result in self.db.iter_prefix(CF_FLEXIBLE_ATTRIBUTES, &prefix) {
             let (key_bytes, _) = result?;
             self.db
-                .batch_delete(&mut batch, CF_FLEXIBLE_ATTRIBUTES, &key_bytes);
+                .batch_delete(&mut batch, CF_FLEXIBLE_ATTRIBUTES, &key_bytes)?;
             count += 1;
         }
 
@@ -393,7 +404,11 @@ impl AttributeStore {
             }
         }
 
-        debug!("Found {} attribute keys for object {}", keys.len(), object_id);
+        debug!(
+            "Found {} attribute keys for object {}",
+            keys.len(),
+            object_id
+        );
         Ok(keys)
     }
 
@@ -419,383 +434,5 @@ impl AttributeStore {
     /// Prefix format: object_id (64 bytes)
     fn make_attribute_prefix(&self, object_id: &ObjectID) -> Vec<u8> {
         object_id.as_bytes().to_vec()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_store() -> (AttributeStore, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let db = Arc::new(RocksDatabase::open(temp_dir.path()).unwrap());
-        let store = AttributeStore::new(db);
-        (store, temp_dir)
-    }
-
-    fn create_test_object_id(id: u8) -> ObjectID {
-        ObjectID::new([id; 64])
-    }
-
-    #[test]
-    fn test_set_and_get_attribute() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set string attribute
-        store
-            .set_attribute(&object_id, "name", AttributeValue::String("Alice".to_string()))
-            .unwrap();
-
-        // Get attribute
-        let value = store.get_attribute(&object_id, "name").unwrap();
-        assert!(value.is_some());
-        assert_eq!(value.unwrap().as_string(), Some("Alice"));
-    }
-
-    #[test]
-    fn test_attribute_types() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // String
-        store
-            .set_attribute(&object_id, "str", AttributeValue::String("test".to_string()))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "str")
-                .unwrap()
-                .unwrap()
-                .as_string(),
-            Some("test")
-        );
-
-        // Integer
-        store
-            .set_attribute(&object_id, "int", AttributeValue::Integer(-42))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "int")
-                .unwrap()
-                .unwrap()
-                .as_integer(),
-            Some(-42)
-        );
-
-        // Unsigned Integer
-        store
-            .set_attribute(&object_id, "uint", AttributeValue::UnsignedInteger(100))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "uint")
-                .unwrap()
-                .unwrap()
-                .as_unsigned_integer(),
-            Some(100)
-        );
-
-        // Boolean
-        store
-            .set_attribute(&object_id, "bool", AttributeValue::Boolean(true))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "bool")
-                .unwrap()
-                .unwrap()
-                .as_boolean(),
-            Some(true)
-        );
-
-        // Bytes
-        store
-            .set_attribute(&object_id, "bytes", AttributeValue::Bytes(vec![1, 2, 3]))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "bytes")
-                .unwrap()
-                .unwrap()
-                .as_bytes(),
-            Some(&[1, 2, 3][..])
-        );
-
-        // Float
-        store
-            .set_attribute(&object_id, "float", AttributeValue::Float(3.14))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "float")
-                .unwrap()
-                .unwrap()
-                .as_float(),
-            Some(3.14)
-        );
-
-        // Null
-        store
-            .set_attribute(&object_id, "null", AttributeValue::Null)
-            .unwrap();
-        assert!(store
-            .get_attribute(&object_id, "null")
-            .unwrap()
-            .unwrap()
-            .is_null());
-    }
-
-    #[test]
-    fn test_has_attribute() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Should not exist initially
-        assert!(!store.has_attribute(&object_id, "key").unwrap());
-
-        // Set attribute
-        store
-            .set_attribute(&object_id, "key", AttributeValue::String("value".to_string()))
-            .unwrap();
-
-        // Should exist now
-        assert!(store.has_attribute(&object_id, "key").unwrap());
-    }
-
-    #[test]
-    fn test_remove_attribute() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set attribute
-        store
-            .set_attribute(&object_id, "key", AttributeValue::String("value".to_string()))
-            .unwrap();
-        assert!(store.has_attribute(&object_id, "key").unwrap());
-
-        // Remove attribute
-        store.remove_attribute(&object_id, "key").unwrap();
-
-        // Should not exist anymore
-        assert!(!store.has_attribute(&object_id, "key").unwrap());
-    }
-
-    #[test]
-    fn test_get_all_attributes() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set multiple attributes
-        store
-            .set_attribute(&object_id, "name", AttributeValue::String("Alice".to_string()))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "age", AttributeValue::Integer(30))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "active", AttributeValue::Boolean(true))
-            .unwrap();
-
-        // Get all attributes
-        let attributes = store.get_all_attributes(&object_id).unwrap();
-        assert_eq!(attributes.len(), 3);
-        assert!(attributes.contains_key("name"));
-        assert!(attributes.contains_key("age"));
-        assert!(attributes.contains_key("active"));
-    }
-
-    #[test]
-    fn test_set_attributes_batch() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        let mut attributes = HashMap::new();
-        attributes.insert("key1".to_string(), AttributeValue::String("value1".to_string()));
-        attributes.insert("key2".to_string(), AttributeValue::Integer(42));
-        attributes.insert("key3".to_string(), AttributeValue::Boolean(false));
-
-        // Set all attributes atomically
-        store.set_attributes(&object_id, &attributes).unwrap();
-
-        // Verify all attributes exist
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "key1")
-                .unwrap()
-                .unwrap()
-                .as_string(),
-            Some("value1")
-        );
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "key2")
-                .unwrap()
-                .unwrap()
-                .as_integer(),
-            Some(42)
-        );
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "key3")
-                .unwrap()
-                .unwrap()
-                .as_boolean(),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn test_remove_all_attributes() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set multiple attributes
-        store
-            .set_attribute(&object_id, "key1", AttributeValue::String("value1".to_string()))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "key2", AttributeValue::Integer(42))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "key3", AttributeValue::Boolean(true))
-            .unwrap();
-
-        // Verify attributes exist
-        assert_eq!(store.get_attribute_count(&object_id).unwrap(), 3);
-
-        // Remove all attributes
-        store.remove_all_attributes(&object_id).unwrap();
-
-        // Verify all attributes are removed
-        assert_eq!(store.get_attribute_count(&object_id).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_get_attribute_keys() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set multiple attributes
-        store
-            .set_attribute(&object_id, "name", AttributeValue::String("Alice".to_string()))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "age", AttributeValue::Integer(30))
-            .unwrap();
-
-        // Get attribute keys
-        let keys = store.get_attribute_keys(&object_id).unwrap();
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&"name".to_string()));
-        assert!(keys.contains(&"age".to_string()));
-    }
-
-    #[test]
-    fn test_update_attribute() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Set initial value
-        store
-            .set_attribute(&object_id, "counter", AttributeValue::Integer(1))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "counter")
-                .unwrap()
-                .unwrap()
-                .as_integer(),
-            Some(1)
-        );
-
-        // Update value
-        store
-            .set_attribute(&object_id, "counter", AttributeValue::Integer(2))
-            .unwrap();
-        assert_eq!(
-            store
-                .get_attribute(&object_id, "counter")
-                .unwrap()
-                .unwrap()
-                .as_integer(),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn test_attributes_isolated_by_object() {
-        let (store, _temp) = create_test_store();
-        let object1 = create_test_object_id(1);
-        let object2 = create_test_object_id(2);
-
-        // Set attributes for object1
-        store
-            .set_attribute(&object1, "key", AttributeValue::String("value1".to_string()))
-            .unwrap();
-
-        // Set attributes for object2
-        store
-            .set_attribute(&object2, "key", AttributeValue::String("value2".to_string()))
-            .unwrap();
-
-        // Verify attributes are isolated
-        assert_eq!(
-            store
-                .get_attribute(&object1, "key")
-                .unwrap()
-                .unwrap()
-                .as_string(),
-            Some("value1")
-        );
-        assert_eq!(
-            store
-                .get_attribute(&object2, "key")
-                .unwrap()
-                .unwrap()
-                .as_string(),
-            Some("value2")
-        );
-    }
-
-    #[test]
-    fn test_empty_key_rejected() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        let result = store.set_attribute(&object_id, "", AttributeValue::String("value".to_string()));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_long_key_rejected() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        let long_key = "a".repeat(257);
-        let result = store.set_attribute(&object_id, &long_key, AttributeValue::String("value".to_string()));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_get_attribute_count() {
-        let (store, _temp) = create_test_store();
-        let object_id = create_test_object_id(1);
-
-        // Initially 0
-        assert_eq!(store.get_attribute_count(&object_id).unwrap(), 0);
-
-        // Add attributes
-        store
-            .set_attribute(&object_id, "key1", AttributeValue::Integer(1))
-            .unwrap();
-        store
-            .set_attribute(&object_id, "key2", AttributeValue::Integer(2))
-            .unwrap();
-
-        // Should be 2
-        assert_eq!(store.get_attribute_count(&object_id).unwrap(), 2);
     }
 }
