@@ -5,13 +5,13 @@ use thiserror::Error;
 /// Storage error type
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Storage backend error (RocksDB)
+    /// Storage backend error
     #[error("Storage error: {0}")]
     Storage(String),
 
-    /// Serialization/deserialization error
+    /// Serialization error
     #[error("Serialization error: {0}")]
-    Serialization(String),
+    Serialization(#[from] bincode::Error),
 
     /// Data not found
     #[error("Data not found: {0}")]
@@ -21,21 +21,9 @@ pub enum Error {
     #[error("Invalid data: {0}")]
     InvalidData(String),
 
-    /// Core error from silver-core crate
+    /// Core error
     #[error("Core error: {0}")]
     Core(#[from] silver_core::Error),
-
-    /// Bincode serialization error
-    #[error("Bincode error: {0}")]
-    Bincode(#[from] bincode::Error),
-
-    /// JSON serialization error
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    /// I/O error
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 /// Result type for storage operations

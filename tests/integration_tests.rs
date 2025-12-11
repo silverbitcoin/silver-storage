@@ -13,17 +13,17 @@ use silver_storage::persistence::models::{
     ValidatorTier, Signature, TransactionStatus, NetworkConfig, AccountConfig, 
     ConsensusConfig, FuelConfig, ValidatorConfig
 };
-use silver_storage::RocksDatabase;
+use silver_storage::ParityDatabase;
 use std::fs;
 use tempfile::TempDir;
 
-/// Test helper to create a temporary database
-fn create_test_db() -> (TempDir, RocksDatabase) {
+/// Test helper to create a temporary ParityDB database
+fn create_test_db() -> (TempDir, ParityDatabase) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let db_path = temp_dir.path().join("test_db");
     fs::create_dir_all(&db_path).expect("Failed to create db directory");
 
-    let db = RocksDatabase::open(&db_path).expect("Failed to open test database");
+    let db = ParityDatabase::open(&db_path).expect("Failed to open test ParityDB database");
 
     (temp_dir, db)
 }

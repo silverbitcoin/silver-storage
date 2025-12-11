@@ -27,7 +27,7 @@ dashmap = { workspace = true }
 hex = { workspace = true }
 
 # Storage
-rocksdb = { workspace = true }
+parity-db = { workspace = true }
 lz4 = { workspace = true }
 
 # Cryptography

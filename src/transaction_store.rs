@@ -1,269 +1,332 @@
-//! Transaction storage with effects and indexing
-//!
-//! This module provides storage for finalized transactions with their execution effects.
-//! Transactions are indexed by digest for efficient retrieval.
+//! Transaction storage with ParityDB backend
 
-use crate::{
-    db::{RocksDatabase, CF_TRANSACTIONS},
-    Result,
-};
+use crate::db::{ParityDatabase, CF_TRANSACTIONS};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use silver_core::{Transaction, TransactionDigest};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Transaction execution effects
-///
-/// Stores the results of transaction execution including
-/// fuel used, status, and any error messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionEffects {
-    /// Transaction digest
-    pub digest: TransactionDigest,
-
-    /// Execution status
-    pub status: ExecutionStatus,
-
-    /// Fuel used during execution
-    pub fuel_used: u64,
-
-    /// Error message if execution failed
-    pub error_message: Option<String>,
-
-    /// Timestamp when transaction was executed (Unix milliseconds)
-    pub timestamp: u64,
-}
-
-/// Transaction execution status
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Execution status for transactions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecutionStatus {
-    /// Transaction executed successfully
-    Success,
-
-    /// Transaction execution failed
-    Failed,
-
     /// Transaction is pending execution
     Pending,
+    /// Transaction executed successfully
+    Success,
+    /// Transaction execution failed
+    Failed,
 }
 
-/// Stored transaction with effects
+impl std::fmt::Display for ExecutionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutionStatus::Pending => write!(f, "Pending"),
+            ExecutionStatus::Success => write!(f, "Success"),
+            ExecutionStatus::Failed => write!(f, "Failed"),
+        }
+    }
+}
+
+/// Transaction effects after execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionEffects {
+    /// Execution status
+    pub status: ExecutionStatus,
+    /// Gas used in execution
+    pub gas_used: u64,
+    /// Gas refunded to sender
+    pub gas_refunded: u64,
+    /// Transaction digest (hash)
+    pub digest: TransactionDigest,
+    /// Fuel used in execution
+    pub fuel_used: u64,
+    /// Execution timestamp (Unix milliseconds)
+    pub timestamp: u64,
+    /// Error message if execution failed
+    pub error_message: Option<String>,
+}
+
+impl TransactionEffects {
+    /// Create new transaction effects
+    pub fn new(
+        status: ExecutionStatus,
+        gas_used: u64,
+        gas_refunded: u64,
+        digest: TransactionDigest,
+        fuel_used: u64,
+        timestamp: u64,
+        error_message: Option<String>,
+    ) -> Self {
+        Self {
+            status,
+            gas_used,
+            gas_refunded,
+            digest,
+            fuel_used,
+            timestamp,
+            error_message,
+        }
+    }
+}
+
+/// Stored transaction with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredTransaction {
-    /// The transaction
-    pub transaction: Transaction,
-
+    /// Transaction digest (hash)
+    pub digest: TransactionDigest,
+    /// Serialized transaction data
+    pub data: Vec<u8>,
     /// Execution effects
     pub effects: TransactionEffects,
+    /// Timestamp (Unix milliseconds)
+    pub timestamp: u64,
+    /// Deserialized transaction
+    pub transaction: Transaction,
 }
 
-/// Transaction store for finalized transactions
+impl StoredTransaction {
+    /// Create a new stored transaction
+    pub fn new(
+        digest: TransactionDigest,
+        data: Vec<u8>,
+        effects: TransactionEffects,
+        timestamp: u64,
+        transaction: Transaction,
+    ) -> Self {
+        Self {
+            digest,
+            data,
+            effects,
+            timestamp,
+            transaction,
+        }
+    }
+}
+
+/// Transaction store with ParityDB backend
 ///
-/// Provides storage and retrieval of transactions with their execution effects.
+/// Provides persistent storage for blockchain transactions with:
+/// - Efficient transaction lookups by digest
+/// - Atomic transaction writes
+/// - Transaction effect tracking
+/// - Compression support
 pub struct TransactionStore {
-    /// Reference to the RocksDB database
-    db: Arc<RocksDatabase>,
+    db: Arc<ParityDatabase>,
 }
 
 impl TransactionStore {
-    /// Create a new transaction store
-    ///
-    /// # Arguments
-    /// * `db` - Shared reference to the RocksDB database
-    pub fn new(db: Arc<RocksDatabase>) -> Self {
-        info!("Initializing TransactionStore");
+    /// Create new transaction store with ParityDB backend
+    pub fn new(db: Arc<ParityDatabase>) -> Self {
+        info!("Initializing TransactionStore with ParityDB backend");
         Self { db }
     }
 
-    /// Store a finalized transaction with its effects
-    ///
-    /// # Arguments
-    /// * `transaction` - The transaction to store
-    /// * `effects` - Execution effects
-    ///
-    /// # Errors
-    /// Returns error if serialization or database write fails
-    pub fn store_transaction(
-        &self,
-        transaction: &Transaction,
-        effects: TransactionEffects,
-    ) -> Result<()> {
-        let digest = transaction.digest();
-        debug!("Storing transaction: {}", digest);
-
-        // Create stored transaction
-        let stored = StoredTransaction {
-            transaction: transaction.clone(),
-            effects,
-        };
-
-        // Serialize
-        let stored_bytes = bincode::serialize(&stored)?;
-
-        // Store by digest
-        let key = self.make_transaction_key(&digest);
-        self.db.put(CF_TRANSACTIONS, &key, &stored_bytes)?;
-
-        debug!(
-            "Transaction {} stored successfully ({} bytes)",
-            digest,
-            stored_bytes.len()
-        );
-
+    /// Store a transaction persistently
+    pub fn store_transaction(&self, tx: &StoredTransaction) -> Result<()> {
+        debug!("Storing transaction with digest: {}", tx.digest.to_hex());
+        
+        // Serialize transaction
+        let tx_data = bincode::serialize(tx)?;
+        
+        // Store by transaction digest as key
+        let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
+        self.db.put(CF_TRANSACTIONS, &key, &tx_data)?;
+        
         Ok(())
     }
 
-    /// Get a transaction by digest
-    ///
-    /// # Arguments
-    /// * `digest` - Transaction digest
-    ///
-    /// # Returns
-    /// - `Ok(Some(stored_transaction))` if transaction exists
-    /// - `Ok(None)` if transaction doesn't exist
-    /// - `Err` on database or deserialization error
+    /// Get transaction by digest
     pub fn get_transaction(&self, digest: &TransactionDigest) -> Result<Option<StoredTransaction>> {
-        debug!("Retrieving transaction: {}", digest);
-
-        let key = self.make_transaction_key(digest);
-        let stored_bytes = self.db.get(CF_TRANSACTIONS, &key)?;
-
-        match stored_bytes {
-            Some(bytes) => {
-                let stored: StoredTransaction = bincode::deserialize(&bytes)?;
-                debug!("Transaction {} retrieved", digest);
-                Ok(Some(stored))
+        debug!("Retrieving transaction with digest: {}", digest.to_hex());
+        
+        let key = format!("tx:{}", digest.to_hex()).into_bytes();
+        
+        match self.db.get(CF_TRANSACTIONS, &key)? {
+            Some(data) => {
+                let tx = bincode::deserialize(&data)?;
+                Ok(Some(tx))
             }
-            None => {
-                debug!("Transaction {} not found", digest);
-                Ok(None)
-            }
+            None => Ok(None),
         }
     }
 
-    /// Check if a transaction exists
-    ///
-    /// # Arguments
-    /// * `digest` - Transaction digest
-    pub fn exists(&self, digest: &TransactionDigest) -> Result<bool> {
-        let key = self.make_transaction_key(digest);
+    /// Check if transaction exists
+    pub fn transaction_exists(&self, digest: &TransactionDigest) -> Result<bool> {
+        let key = format!("tx:{}", digest.to_hex()).into_bytes();
         self.db.exists(CF_TRANSACTIONS, &key)
     }
 
-    /// Get transaction effects only (without full transaction data)
-    ///
-    /// # Arguments
-    /// * `digest` - Transaction digest
-    ///
-    /// # Returns
-    /// - `Ok(Some(effects))` if transaction exists
-    /// - `Ok(None)` if transaction doesn't exist
-    pub fn get_effects(&self, digest: &TransactionDigest) -> Result<Option<TransactionEffects>> {
-        self.get_transaction(digest)
-            .map(|opt| opt.map(|stored| stored.effects))
-    }
-
-    /// Batch store multiple transactions
-    ///
-    /// All transactions are stored atomically.
-    ///
-    /// # Arguments
-    /// * `transactions` - Slice of (transaction, effects) pairs
-    ///
-    /// # Errors
-    /// Returns error if serialization or database write fails.
-    /// On error, no transactions are stored (atomic operation).
-    pub fn batch_store_transactions(
-        &self,
-        transactions: &[(Transaction, TransactionEffects)],
-    ) -> Result<()> {
-        if transactions.is_empty() {
-            return Ok(());
-        }
-
-        info!("Batch storing {} transactions", transactions.len());
-
-        // Create atomic batch
-        let mut batch = self.db.batch();
-
-        for (transaction, effects) in transactions {
-            let digest = transaction.digest();
-
-            let stored = StoredTransaction {
-                transaction: transaction.clone(),
-                effects: effects.clone(),
-            };
-
-            let stored_bytes = bincode::serialize(&stored)?;
-            let key = self.make_transaction_key(&digest);
-
-            self.db
-                .batch_put(&mut batch, CF_TRANSACTIONS, &key, &stored_bytes)?;
-        }
-
-        // Write batch atomically
-        self.db.write_batch(batch)?;
-
-        info!(
-            "Batch stored {} transactions successfully",
-            transactions.len()
-        );
+    /// Batch store multiple transactions atomically
+    pub fn batch_store_transactions(&self, transactions: &[StoredTransaction]) -> Result<()> {
+        debug!("Batch storing {} transactions", transactions.len());
+        
+        let items: Result<Vec<_>> = transactions
+            .iter()
+            .map(|tx| {
+                let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
+                let value = bincode::serialize(tx)?;
+                Ok((key, value))
+            })
+            .collect();
+        
+        self.db.batch_write(CF_TRANSACTIONS, &items?)?;
+        
         Ok(())
     }
 
-    /// Get the total number of stored transactions (approximate)
+    /// Delete a transaction
+    pub fn delete_transaction(&self, digest: &TransactionDigest) -> Result<()> {
+        debug!("Deleting transaction with digest: {}", digest.to_hex());
+        
+        let key = format!("tx:{}", digest.to_hex()).into_bytes();
+        self.db.delete(CF_TRANSACTIONS, &key)?;
+        
+        Ok(())
+    }
+
+    /// Get transaction count from database metadata
     pub fn get_transaction_count(&self) -> Result<u64> {
-        self.db.get_cf_key_count(CF_TRANSACTIONS)
+        debug!("Getting transaction count");
+        self.db.get_transaction_count()
     }
 
-    /// Get the total size of transaction storage in bytes
-    pub fn get_storage_size(&self) -> Result<u64> {
-        self.db.get_cf_size(CF_TRANSACTIONS)
-    }
-
-    // ========== Private Helper Methods ==========
-
-    /// Create transaction storage key
-    ///
-    /// Key format: transaction_digest (64 bytes)
-    fn make_transaction_key(&self, digest: &TransactionDigest) -> Vec<u8> {
-        digest.as_bytes().to_vec()
-    }
-
-    /// Get the latest block number (delegates to block metadata)
-    pub fn get_latest_block_number(&self) -> Result<u64> {
-        let metadata_key = b"latest_block_number".to_vec();
-
-        match self.db.get(CF_TRANSACTIONS, &metadata_key)? {
-            Some(bytes) => {
-                if bytes.len() == 8 {
-                    let number = u64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]);
-                    Ok(number)
-                } else {
-                    Ok(0)
+    /// Iterate all transactions
+    pub fn iterate_transactions(&self) -> Result<Vec<StoredTransaction>> {
+        debug!("Iterating all transactions");
+        
+        let mut transactions = Vec::new();
+        
+        // Query the transaction index to get all transaction digests
+        let tx_index_key = b"tx_index:all".to_vec();
+        if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &tx_index_key) {
+            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for tx_digest in tx_digests {
+                    let key = format!("tx:{}", tx_digest).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
+                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                            transactions.push(tx);
+                        }
+                    }
                 }
             }
-            None => Ok(0),
         }
+        
+        debug!("Iterated {} total transactions", transactions.len());
+        Ok(transactions)
     }
 
-    /// Get block by number (delegates to block storage)
-    pub fn get_block(&self, number: u64) -> Result<Option<crate::Block>> {
-        let key = {
-            let mut k = b"block:".to_vec();
-            k.extend_from_slice(&number.to_le_bytes());
-            k
-        };
-
-        match self.db.get(CF_TRANSACTIONS, &key)? {
-            Some(bytes) => {
-                let block: crate::Block = bincode::deserialize(&bytes)?;
-                Ok(Some(block))
+    /// Get transactions by sender address
+    pub fn get_transactions_by_sender(&self, sender: &[u8]) -> Result<Vec<StoredTransaction>> {
+        debug!("Getting transactions by sender: {:?}", sender);
+        
+        let mut transactions = Vec::new();
+        let sender_hex = hex::encode(sender);
+        let sender_index_key = format!("sender_index:{}", sender_hex).into_bytes();
+        
+        // Query the sender_index for all transactions from this sender
+        if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &sender_index_key) {
+            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for tx_digest in tx_digests {
+                    let key = format!("tx:{}", tx_digest).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
+                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                            transactions.push(tx);
+                        }
+                    }
+                }
             }
-            None => Ok(None),
+        }
+        
+        debug!("Retrieved {} transactions from sender {:?}", transactions.len(), sender);
+        Ok(transactions)
+    }
+
+    /// Get transactions by recipient address
+    pub fn get_transactions_by_recipient(&self, recipient: &[u8]) -> Result<Vec<StoredTransaction>> {
+        debug!("Getting transactions by recipient: {:?}", recipient);
+        
+        let mut transactions = Vec::new();
+        let recipient_hex = hex::encode(recipient);
+        let recipient_index_key = format!("recipient_index:{}", recipient_hex).into_bytes();
+        
+        // Query the recipient_index for all transactions to this recipient
+        if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &recipient_index_key) {
+            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for tx_digest in tx_digests {
+                    let key = format!("tx:{}", tx_digest).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
+                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                            transactions.push(tx);
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("Retrieved {} transactions to recipient {:?}", transactions.len(), recipient);
+        Ok(transactions)
+    }
+
+    /// Get pending transactions (not yet executed)
+    pub fn get_pending_transactions(&self) -> Result<Vec<StoredTransaction>> {
+        debug!("Getting pending transactions");
+        
+        let mut pending = Vec::new();
+        let pending_index_key = b"pending_index:all".to_vec();
+        
+        // Query the pending_index for all pending transactions
+        if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &pending_index_key) {
+            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for tx_digest in tx_digests {
+                    let key = format!("tx:{}", tx_digest).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
+                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                            if tx.effects.status == ExecutionStatus::Pending {
+                                pending.push(tx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("Retrieved {} pending transactions", pending.len());
+        Ok(pending)
+    }
+
+    /// Get failed transactions
+    pub fn get_failed_transactions(&self) -> Result<Vec<StoredTransaction>> {
+        debug!("Getting failed transactions");
+        
+        let mut failed = Vec::new();
+        let failed_index_key = b"failed_index:all".to_vec();
+        
+        // Query the failed_index for all failed transactions
+        if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &failed_index_key) {
+            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for tx_digest in tx_digests {
+                    let key = format!("tx:{}", tx_digest).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
+                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                            if tx.effects.status == ExecutionStatus::Failed {
+                                failed.push(tx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("Retrieved {} failed transactions", failed.len());
+        Ok(failed)
+    }
+}
+
+impl Clone for TransactionStore {
+    fn clone(&self) -> Self {
+        Self {
+            db: Arc::clone(&self.db),
         }
     }
 }

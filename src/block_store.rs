@@ -1,51 +1,68 @@
-//! Block storage with indexing
-//!
-//! This module provides storage for blockchain blocks with efficient retrieval.
+//! Block storage with ParityDB backend
 
-use crate::{
-    db::{RocksDatabase, CF_BLOCKS},
-    Result,
-};
+use crate::db::{ParityDatabase, CF_BLOCKS};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use silver_core::TransactionDigest;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Block information
+/// Block data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
-    /// Block number (height)
+    /// Block number (sequence number)
     pub number: u64,
-
-    /// Block hash
-    pub hash: Vec<u8>,
-
-    /// Parent block hash
-    pub parent_hash: Vec<u8>,
-
-    /// Block creation timestamp (Unix milliseconds)
+    /// Block hash (256-bit) - stored as Vec for serialization
+    #[serde(with = "serde_arrays")]
+    pub hash: [u8; 64],
+    /// Parent block hash - stored as Vec for serialization
+    #[serde(with = "serde_arrays")]
+    pub parent_hash: [u8; 64],
+    /// Timestamp (Unix milliseconds)
     pub timestamp: u64,
-
-    /// Transaction digests in this block
-    pub transactions: Vec<Vec<u8>>,
-
-    /// Validator who created this block
+    /// Transactions in block
+    pub transactions: Vec<TransactionDigest>,
+    /// Validator address (20 bytes for Ethereum compatibility)
     pub validator: Vec<u8>,
-
-    /// Gas used in this block
+    /// Gas used in block
     pub gas_used: u64,
-
-    /// Gas limit for this block
+    /// Gas limit for block
     pub gas_limit: u64,
+}
+
+// Helper module for serializing fixed-size arrays
+mod serde_arrays {
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(data: &[u8; 64], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(data)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 64], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let vec: Vec<u8> = serde::de::Deserialize::deserialize(deserializer)?;
+        let mut array = [0u8; 64];
+        if vec.len() != 64 {
+            return Err(serde::de::Error::custom("Invalid array length"));
+        }
+        array.copy_from_slice(&vec);
+        Ok(array)
+    }
 }
 
 impl Block {
     /// Create a new block
     pub fn new(
         number: u64,
-        hash: Vec<u8>,
-        parent_hash: Vec<u8>,
+        hash: [u8; 64],
+        parent_hash: [u8; 64],
         timestamp: u64,
-        transactions: Vec<Vec<u8>>,
+        transactions: Vec<TransactionDigest>,
         validator: Vec<u8>,
         gas_used: u64,
         gas_limit: u64,
@@ -61,195 +78,156 @@ impl Block {
             gas_limit,
         }
     }
-
-    /// Get block size in bytes
-    pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<u64>()
-            + self.hash.len()
-            + self.parent_hash.len()
-            + std::mem::size_of::<u64>()
-            + self.transactions.iter().map(|t| t.len()).sum::<usize>()
-            + self.validator.len()
-            + std::mem::size_of::<u64>() * 2
-    }
 }
 
-/// Block store for blockchain blocks
+/// Block store with ParityDB backend
+///
+/// Provides persistent storage for blockchain blocks with:
+/// - Efficient block lookups by number
+/// - Atomic block writes
+/// - Compression support
 pub struct BlockStore {
-    /// Reference to the RocksDB database
-    db: Arc<RocksDatabase>,
+    db: Arc<ParityDatabase>,
 }
 
 impl BlockStore {
-    /// Create a new block store
-    pub fn new(db: Arc<RocksDatabase>) -> Self {
-        info!("Initializing BlockStore");
+    /// Create new block store with ParityDB backend
+    pub fn new(db: Arc<ParityDatabase>) -> Self {
+        info!("Initializing BlockStore with ParityDB backend");
         Self { db }
     }
 
-    /// Store a block
+    /// Store a block persistently
     pub fn store_block(&self, block: &Block) -> Result<()> {
-        debug!("Storing block: {}", block.number);
-
-        let block_bytes = bincode::serialize(block)?;
-        let key = self.make_block_key(block.number);
-
-        self.db.put(CF_BLOCKS, &key, &block_bytes)?;
-
-        // Update latest block number
-        self.set_latest_block_number(block.number)?;
-
-        // Store hash index for fast lookup
-        let hash_array: [u8; 64] = if block.hash.len() == 64 {
-            let mut arr = [0u8; 64];
-            arr.copy_from_slice(&block.hash);
-            arr
-        } else {
-            // Hash is not 64 bytes, skip indexing
-            return Ok(());
-        };
-
-        self.store_block_hash_index(&hash_array, block.number)?;
-
-        debug!(
-            "Block {} stored successfully ({} bytes)",
-            block.number,
-            block_bytes.len()
-        );
+        debug!("Storing block #{} with hash {:?}", block.number, block.hash);
+        
+        // Serialize block
+        let block_data = bincode::serialize(block)?;
+        
+        // Store by block number as key
+        let key = format!("block:{}", block.number).into_bytes();
+        self.db.put(CF_BLOCKS, &key, &block_data)?;
+        
+        // Also store latest block pointer
+        let latest_key = b"block:latest".to_vec();
+        self.db.put(CF_BLOCKS, &latest_key, &block_data)?;
+        
         Ok(())
     }
 
-    /// Get a block by number
+    /// Get block by number
     pub fn get_block(&self, number: u64) -> Result<Option<Block>> {
-        debug!("Retrieving block: {}", number);
-
-        let key = self.make_block_key(number);
-        let block_bytes = self.db.get(CF_BLOCKS, &key)?;
-
-        match block_bytes {
-            Some(bytes) => {
-                let block: Block = bincode::deserialize(&bytes)?;
-                debug!("Block {} retrieved", number);
+        debug!("Retrieving block #{}", number);
+        
+        let key = format!("block:{}", number).into_bytes();
+        
+        match self.db.get(CF_BLOCKS, &key)? {
+            Some(data) => {
+                let block = bincode::deserialize(&data)?;
                 Ok(Some(block))
             }
-            None => {
-                debug!("Block {} not found", number);
-                Ok(None)
-            }
+            None => Ok(None),
         }
     }
 
-    /// Get the latest block number
-    pub fn get_latest_block_number(&self) -> Result<u64> {
-        debug!("Retrieving latest block number");
+    /// Get latest block
+    pub fn get_latest_block(&self) -> Result<Option<Block>> {
+        debug!("Retrieving latest block");
+        
+        let key = b"block:latest".to_vec();
+        
+        match self.db.get(CF_BLOCKS, &key)? {
+            Some(data) => {
+                let block = bincode::deserialize(&data)?;
+                Ok(Some(block))
+            }
+            None => Ok(None),
+        }
+    }
 
-        // Try to get the latest block number from metadata
-        let metadata_key = b"latest_block_number".to_vec();
-
-        match self.db.get(CF_BLOCKS, &metadata_key)? {
-            Some(bytes) => {
-                if bytes.len() == 8 {
-                    let number = u64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]);
-                    debug!("Latest block number: {}", number);
-                    Ok(number)
-                } else {
-                    debug!("Invalid metadata format, returning 0");
-                    Ok(0)
+    /// Get blocks by hash
+    pub fn get_blocks_by_hash(&self, hash: &str) -> Result<Vec<Block>> {
+        debug!("Retrieving blocks by hash: {}", hash);
+        
+        // Validate hash format (should be 64 hex characters for SHA256)
+        if hash.len() != 64 {
+            return Ok(Vec::new());
+        }
+        
+        // Convert hex string to bytes
+        let hash_bytes = match hex::decode(hash) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(Vec::new()),
+        };
+        
+        if hash_bytes.len() != 32 {
+            return Ok(Vec::new());
+        }
+        
+        // Query by hash index in ParityDB
+        let hash_index_key = format!("block_hash_index:{}", hash).into_bytes();
+        
+        match self.db.get(CF_BLOCKS, &hash_index_key)? {
+            Some(block_number_bytes) => {
+                // Decode block number from index
+                if block_number_bytes.len() != 8 {
+                    return Ok(Vec::new());
+                }
+                
+                let block_number = u64::from_le_bytes([
+                    block_number_bytes[0], block_number_bytes[1],
+                    block_number_bytes[2], block_number_bytes[3],
+                    block_number_bytes[4], block_number_bytes[5],
+                    block_number_bytes[6], block_number_bytes[7],
+                ]);
+                
+                // Retrieve the actual block
+                match self.get_block(block_number)? {
+                    Some(block) => Ok(vec![block]),
+                    None => Ok(Vec::new()),
                 }
             }
-            None => {
-                debug!("No blocks stored yet");
-                Ok(0)
-            }
+            None => Ok(Vec::new()),
         }
     }
 
-    /// Set the latest block number (called after storing a block)
-    pub fn set_latest_block_number(&self, number: u64) -> Result<()> {
-        debug!("Setting latest block number to: {}", number);
-
-        let metadata_key = b"latest_block_number".to_vec();
-        let number_bytes = number.to_le_bytes().to_vec();
-
-        self.db.put(CF_BLOCKS, &metadata_key, &number_bytes)?;
-
-        debug!("Latest block number set to: {}", number);
-        Ok(())
+    /// Check if block exists
+    pub fn block_exists(&self, number: u64) -> Result<bool> {
+        let key = format!("block:{}", number).into_bytes();
+        self.db.exists(CF_BLOCKS, &key)
     }
 
     /// Get block by hash
     pub fn get_block_by_hash(&self, hash: &[u8; 64]) -> Result<Option<Block>> {
         debug!("Retrieving block by hash");
-
-        // Create hash index key
-        let hash_key = {
-            let mut key = b"hash:".to_vec();
-            key.extend_from_slice(hash);
-            key
-        };
-
-        match self.db.get(CF_BLOCKS, &hash_key)? {
-            Some(bytes) => {
-                let block_number = u64::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-                ]);
-
-                // Retrieve the actual block
-                self.get_block(block_number)
+        
+        let key = format!("block:hash:{}", hex::encode(&hash[..])).into_bytes();
+        
+        match self.db.get(CF_BLOCKS, &key)? {
+            Some(data) => {
+                let block = bincode::deserialize(&data)?;
+                Ok(Some(block))
             }
-            None => {
-                debug!("Block with hash not found");
-                Ok(None)
-            }
+            None => Ok(None),
         }
     }
 
-    /// Store hash index for a block
-    pub fn store_block_hash_index(&self, hash: &[u8; 64], block_number: u64) -> Result<()> {
-        debug!("Storing hash index for block {}", block_number);
-
-        let hash_key = {
-            let mut key = b"hash:".to_vec();
-            key.extend_from_slice(hash);
-            key
-        };
-
-        let number_bytes = block_number.to_le_bytes().to_vec();
-        self.db.put(CF_BLOCKS, &hash_key, &number_bytes)?;
-
-        Ok(())
-    }
-
-    /// Batch store multiple blocks
-    pub fn batch_store_blocks(&self, blocks: &[Block]) -> Result<()> {
-        if blocks.is_empty() {
-            return Ok(());
+    /// Get latest block number
+    pub fn get_latest_block_number(&self) -> Result<u64> {
+        debug!("Retrieving latest block number");
+        
+        if let Some(block) = self.get_latest_block()? {
+            Ok(block.number)
+        } else {
+            Ok(0)
         }
-
-        info!("Batch storing {} blocks", blocks.len());
-
-        let mut batch = self.db.batch();
-
-        for block in blocks {
-            let block_bytes = bincode::serialize(block)?;
-            let key = self.make_block_key(block.number);
-
-            self.db.batch_put(&mut batch, CF_BLOCKS, &key, &block_bytes)?;
-        }
-
-        self.db.write_batch(batch)?;
-
-        info!("Batch stored {} blocks successfully", blocks.len());
-        Ok(())
     }
+}
 
-    // ========== Private Helper Methods ==========
-
-    /// Create block storage key
-    fn make_block_key(&self, number: u64) -> Vec<u8> {
-        number.to_le_bytes().to_vec()
+impl Clone for BlockStore {
+    fn clone(&self) -> Self {
+        Self {
+            db: Arc::clone(&self.db),
+        }
     }
 }

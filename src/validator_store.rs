@@ -1,533 +1,346 @@
-//! Validator state persistence layer
-//!
-//! This module provides production-ready persistence for:
-//! - Validator set state
-//! - Staking records
-//! - Delegation records
-//! - Reward history
-//! - Validator set change events
-//!
-//! All data is persisted to RocksDB with:
-//! - Atomic writes
-//! - Compression
-//! - Bloom filters
-//! - Full recovery support
+//! Validator state persistence with ParityDB backend
 
-use crate::RocksDatabase;
+use crate::db::{ParityDatabase, CF_OBJECTS};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
-use silver_core::{Error as CoreError, Result as CoreResult, ValidatorID};
-use std::path::Path;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Validator store for persistence
-pub struct ValidatorStore {
-    /// RocksDB database
-    db: RocksDatabase,
-
-    /// Column family for validator set state
-    cf_validator_set: String,
-
-    /// Column family for staking records
-    cf_staking: String,
-
-    /// Column family for delegation records
-    cf_delegation: String,
-
-    /// Column family for reward history
-    cf_rewards: String,
-
-    /// Column family for validator set changes
-    cf_changes: String,
-}
-
-/// Persisted validator set state
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedValidatorSet {
-    /// Current cycle
-    pub cycle: u64,
-
-    /// Total validators
-    pub validator_count: usize,
-
-    /// Total stake
-    pub total_stake: u64,
-
-    /// Timestamp
-    pub timestamp: u64,
-}
-
-/// Persisted staking record
+/// Staking record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedStakingRecord {
-    /// Validator ID
-    pub validator_id: String,
-
-    /// Active stake
-    pub active_stake: u64,
-
-    /// Unbonding stake
-    pub unbonding_stake: u64,
-
-    /// Total stake
-    pub total_stake: u64,
-
-    /// Current tier
-    pub tier: String,
-
-    /// Timestamp
+    /// Validator address
+    pub validator: [u8; 32],
+    /// Staked amount
+    pub amount: u128,
+    /// Staking timestamp
     pub timestamp: u64,
 }
 
-/// Persisted delegation record
+/// Delegation record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedDelegationRecord {
     /// Delegator address
-    pub delegator: String,
-
-    /// Validator ID
-    pub validator_id: String,
-
+    pub delegator: [u8; 32],
+    /// Validator address
+    pub validator: [u8; 32],
     /// Delegated amount
-    pub amount: u64,
-
-    /// Accumulated rewards
-    pub accumulated_rewards: u64,
-
-    /// Timestamp
+    pub amount: u128,
+    /// Delegation timestamp
     pub timestamp: u64,
 }
 
-/// Persisted reward record
+/// Reward record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedRewardRecord {
-    /// Validator ID
-    pub validator_id: String,
-
-    /// Cycle
-    pub cycle: u64,
-
+    /// Validator address
+    pub validator: [u8; 32],
     /// Reward amount
-    pub reward_amount: u64,
+    pub amount: u128,
+    /// Reward timestamp
+    pub timestamp: u64,
+}
 
-    /// Stake weight
-    pub stake_weight: f64,
-
-    /// Participation rate
-    pub participation_rate: f64,
-
+/// Validator set
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedValidatorSet {
+    /// Validators
+    pub validators: Vec<[u8; 32]>,
+    /// Epoch number
+    pub epoch: u64,
     /// Timestamp
     pub timestamp: u64,
 }
 
-/// Validator set change event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidatorSetChangeEvent {
-    /// Cycle number
-    pub cycle: u64,
-
-    /// Timestamp
-    pub timestamp: u64,
-
-    /// Added validators
-    pub added_validators: Vec<String>,
-
-    /// Removed validators
-    pub removed_validators: Vec<String>,
+/// Validator store with ParityDB backend
+///
+/// Provides persistent storage for validator state including:
+/// - Staking records
+/// - Delegation records
+/// - Reward records
+/// - Validator sets
+pub struct ValidatorStore {
+    db: Arc<ParityDatabase>,
 }
 
 impl ValidatorStore {
-    /// Open or create validator store
-    pub fn open<P: AsRef<Path>>(path: P) -> CoreResult<Self> {
-        let db = RocksDatabase::open(&path).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to open validator store: {}", e))
-        })?;
-
-        info!("Opened validator store at: {}", path.as_ref().display());
-
-        Ok(Self {
-            db,
-            cf_validator_set: "validator_set".to_string(),
-            cf_staking: "staking".to_string(),
-            cf_delegation: "delegation".to_string(),
-            cf_rewards: "rewards".to_string(),
-            cf_changes: "changes".to_string(),
-        })
+    /// Create new validator store with ParityDB backend
+    pub fn new(db: Arc<ParityDatabase>) -> Self {
+        info!("Initializing ValidatorStore with ParityDB backend");
+        Self { db }
     }
 
-    /// Save validator set state
-    pub fn save_validator_set(
-        &self,
-        cycle: u64,
-        validator_count: usize,
-        total_stake: u64,
-    ) -> CoreResult<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let state = PersistedValidatorSet {
-            cycle,
-            validator_count,
-            total_stake,
-            timestamp,
-        };
-
-        let key = format!("validator_set:{}", cycle);
-        let value = serde_json::to_vec(&state).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to serialize validator set: {}", e))
-        })?;
-
-        self.db
-            .put(&self.cf_validator_set, key.as_bytes(), &value)
-            .map_err(|e| CoreError::InvalidData(format!("Failed to save validator set: {}", e)))?;
-
-        debug!(
-            "Saved validator set for cycle {} (count: {}, stake: {})",
-            cycle, validator_count, total_stake
-        );
-
+    /// Record staking persistently
+    pub fn record_staking(&self, record: &PersistedStakingRecord) -> Result<()> {
+        debug!("Recording staking for validator: {:?}", record.validator);
+        
+        let data = bincode::serialize(record)?;
+        let key = format!("staking:{}:{}", hex::encode(&record.validator[..]), record.timestamp).into_bytes();
+        self.db.put(CF_OBJECTS, &key, &data)?;
+        
         Ok(())
     }
 
-    /// Load validator set state for cycle
-    pub fn load_validator_set(&self, cycle: u64) -> CoreResult<Option<PersistedValidatorSet>> {
-        let key = format!("validator_set:{}", cycle);
+    /// Record delegation persistently
+    pub fn record_delegation(&self, record: &PersistedDelegationRecord) -> Result<()> {
+        debug!("Recording delegation from {:?} to {:?}", record.delegator, record.validator);
+        
+        let data = bincode::serialize(record)?;
+        let key = format!("delegation:{}:{}:{}", hex::encode(&record.delegator[..]), hex::encode(&record.validator[..]), record.timestamp).into_bytes();
+        self.db.put(CF_OBJECTS, &key, &data)?;
+        
+        Ok(())
+    }
 
-        match self.db.get(&self.cf_validator_set, key.as_bytes()) {
-            Ok(Some(value)) => {
-                let state = serde_json::from_slice(&value).map_err(|e| {
-                    CoreError::InvalidData(format!("Failed to deserialize validator set: {}", e))
-                })?;
-                Ok(Some(state))
+    /// Record reward persistently
+    pub fn record_reward(&self, record: &PersistedRewardRecord) -> Result<()> {
+        debug!("Recording reward for validator: {:?}", record.validator);
+        
+        let data = bincode::serialize(record)?;
+        let key = format!("reward:{}:{}", hex::encode(&record.validator[..]), record.timestamp).into_bytes();
+        self.db.put(CF_OBJECTS, &key, &data)?;
+        
+        Ok(())
+    }
+
+    /// Set validator set persistently
+    pub fn set_validator_set(&self, validator_set: &PersistedValidatorSet) -> Result<()> {
+        debug!("Setting validator set for epoch {}", validator_set.epoch);
+        
+        let data = bincode::serialize(validator_set)?;
+        let key = format!("validator_set:{}", validator_set.epoch).into_bytes();
+        self.db.put(CF_OBJECTS, &key, &data)?;
+        
+        // Also store as latest
+        let latest_key = b"validator_set:latest".to_vec();
+        self.db.put(CF_OBJECTS, &latest_key, &data)?;
+        
+        Ok(())
+    }
+
+    /// Get current validator set
+    pub fn get_current_validator_set(&self) -> Result<Option<PersistedValidatorSet>> {
+        debug!("Retrieving current validator set");
+        
+        let key = b"validator_set:latest".to_vec();
+        
+        match self.db.get(CF_OBJECTS, &key)? {
+            Some(data) => {
+                let validator_set = bincode::deserialize(&data)?;
+                Ok(Some(validator_set))
             }
-            Ok(None) => Ok(None),
-            Err(e) => Err(CoreError::InvalidData(format!(
-                "Failed to load validator set: {}",
-                e
-            ))),
+            None => Ok(None),
         }
     }
 
-    /// Get latest validator set state
-    pub fn get_latest_validator_set(&self) -> CoreResult<Option<PersistedValidatorSet>> {
-        // Iterate from end to find latest
-        let iter = self
-            .db
-            .iter(&self.cf_validator_set, rocksdb::IteratorMode::End);
+    /// Get validator set by epoch
+    pub fn get_validator_set(&self, epoch: u64) -> Result<Option<PersistedValidatorSet>> {
+        debug!("Retrieving validator set for epoch {}", epoch);
+        
+        let key = format!("validator_set:{}", epoch).into_bytes();
+        
+        match self.db.get(CF_OBJECTS, &key)? {
+            Some(data) => {
+                let validator_set = bincode::deserialize(&data)?;
+                Ok(Some(validator_set))
+            }
+            None => Ok(None),
+        }
+    }
 
-        for result in iter {
-            if let Ok((_, value)) = result {
-                if let Ok(state) = serde_json::from_slice::<PersistedValidatorSet>(&value) {
-                    return Ok(Some(state));
+    /// Calculate total stake for validator (self-stake + delegations)
+    pub fn get_total_stake(&self, validator: &[u8; 32]) -> Result<u128> {
+        debug!("Calculating total stake for validator: {:?}", validator);
+        
+        // Get self-stake
+        let self_stake_key = format!("validator_stake:{}", hex::encode(&validator[..])).into_bytes();
+        let self_stake = match self.db.get(crate::db::CF_OBJECTS, &self_stake_key)? {
+            Some(data) => {
+                let record: PersistedStakingRecord = bincode::deserialize(&data)?;
+                record.amount
+            }
+            None => 0,
+        };
+        
+        // Get delegations from persistent storage
+        let mut total_delegations = 0u128;
+        
+        // Query all delegation records for this validator
+        // Delegations are stored with key format: "delegation:{validator_hex}:{delegator_hex}"
+        let validator_hex = hex::encode(&validator[..]);
+        
+        // Since ParityDB doesn't have prefix iteration in the current API,
+        // we maintain a separate index of delegations per validator
+        // Query the delegation index for this validator
+        let delegation_index_key = format!("delegation_index:{}", validator_hex).into_bytes();
+        
+        if let Ok(Some(delegations_data)) = self.db.get(CF_OBJECTS, &delegation_index_key) {
+            // Deserialize the list of delegator addresses
+            if let Ok(delegators) = bincode::deserialize::<Vec<[u8; 32]>>(&delegations_data) {
+                for delegator in delegators {
+                    let delegation_key = format!(
+                        "delegation:{}:{}",
+                        validator_hex,
+                        hex::encode(&delegator[..])
+                    ).into_bytes();
+                    
+                    if let Ok(Some(record_data)) = self.db.get(CF_OBJECTS, &delegation_key) {
+                        if let Ok(record) = bincode::deserialize::<PersistedDelegationRecord>(&record_data) {
+                            total_delegations = total_delegations.saturating_add(record.amount);
+                        }
+                    }
                 }
             }
         }
-
-        Ok(None)
+        
+        Ok(self_stake.saturating_add(total_delegations))
     }
 
-    /// Save staking record
-    pub fn save_staking_record(
-        &self,
-        validator_id: &ValidatorID,
-        active_stake: u64,
-        unbonding_stake: u64,
-        total_stake: u64,
-        tier: &str,
-    ) -> CoreResult<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+    /// Calculate total rewards for validator
+    pub fn get_total_rewards(&self, validator: &[u8; 32]) -> Result<u128> {
+        debug!("Calculating total rewards for validator: {:?}", validator);
+        
+        let mut total_rewards = 0u128;
+        let validator_hex = hex::encode(&validator[..]);
+        let reward_index_key = format!("reward_index:{}", validator_hex).into_bytes();
+        
+        // Query the reward index for all rewards for this validator
+        if let Ok(Some(index_data)) = self.db.get(crate::db::CF_OBJECTS, &reward_index_key) {
+            if let Ok(reward_ids) = bincode::deserialize::<Vec<String>>(&index_data) {
+                for reward_id in reward_ids {
+                    let key = format!("reward:{}:{}", validator_hex, reward_id).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(crate::db::CF_OBJECTS, &key) {
+                        if let Ok(record) = bincode::deserialize::<PersistedRewardRecord>(&data) {
+                            total_rewards = total_rewards.saturating_add(record.amount);
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("Total rewards for validator {:?}: {}", validator, total_rewards);
+        Ok(total_rewards)
+    }
 
+    /// Get all validators with their total stakes
+    pub fn get_all_validators_with_stakes(&self) -> Result<HashMap<[u8; 32], u128>> {
+        debug!("Retrieving all validators with stakes");
+        
+        let mut validators_stakes = HashMap::new();
+        let validator_index_key = b"validator_index:all".to_vec();
+        
+        // Query the validator index for all validators
+        if let Ok(Some(index_data)) = self.db.get(crate::db::CF_OBJECTS, &validator_index_key) {
+            if let Ok(validator_addrs) = bincode::deserialize::<Vec<[u8; 32]>>(&index_data) {
+                for validator in validator_addrs {
+                    if let Ok(Some(stake)) = self.get_validator_stake(&validator) {
+                        validators_stakes.insert(validator, stake);
+                    }
+                }
+            }
+        }
+        
+        debug!("Retrieved {} validators with stakes", validators_stakes.len());
+        Ok(validators_stakes)
+    }
+
+    /// Get validator stake
+    pub fn get_validator_stake(&self, validator: &[u8; 32]) -> Result<Option<u128>> {
+        debug!("Getting validator stake: {:?}", validator);
+        
+        let key = format!("validator_stake:{}", hex::encode(&validator[..])).into_bytes();
+        match self.db.get(crate::db::CF_OBJECTS, &key)? {
+            Some(data) => {
+                let record: PersistedStakingRecord = bincode::deserialize(&data)?;
+                Ok(Some(record.amount))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Set validator stake
+    pub fn set_validator_stake(&self, validator: &[u8; 32], amount: u128) -> Result<()> {
+        debug!("Setting validator stake: {:?} = {}", validator, amount);
+        
         let record = PersistedStakingRecord {
-            validator_id: validator_id.to_string(),
-            active_stake,
-            unbonding_stake,
-            total_stake,
-            tier: tier.to_string(),
-            timestamp,
-        };
-
-        let key = format!("staking:{}:{}", validator_id, timestamp);
-        let value = serde_json::to_vec(&record).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to serialize staking record: {}", e))
-        })?;
-
-        self.db
-            .put(&self.cf_staking, key.as_bytes(), &value)
-            .map_err(|e| CoreError::InvalidData(format!("Failed to save staking record: {}", e)))?;
-
-        debug!(
-            "Saved staking record for validator {} (active: {}, total: {})",
-            validator_id, active_stake, total_stake
-        );
-
-        Ok(())
-    }
-
-    /// Get staking history for validator
-    pub fn get_staking_history(
-        &self,
-        validator_id: &ValidatorID,
-        limit: usize,
-    ) -> CoreResult<Vec<PersistedStakingRecord>> {
-        let prefix = format!("staking:{}:", validator_id);
-        let mut records = Vec::new();
-
-        let iter = self.db.iter(
-            &self.cf_staking,
-            rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Reverse),
-        );
-
-        for result in iter {
-            if let Ok((key, value)) = result {
-                let key_str = String::from_utf8_lossy(&key);
-                if !key_str.starts_with(&prefix) {
-                    break;
-                }
-
-                if let Ok(record) = serde_json::from_slice::<PersistedStakingRecord>(&value) {
-                    records.push(record);
-                    if records.len() >= limit {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(records)
-    }
-
-    /// Save delegation record
-    pub fn save_delegation_record(
-        &self,
-        delegator: &str,
-        validator_id: &ValidatorID,
-        amount: u64,
-        accumulated_rewards: u64,
-    ) -> CoreResult<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let record = PersistedDelegationRecord {
-            delegator: delegator.to_string(),
-            validator_id: validator_id.to_string(),
+            validator: *validator,
             amount,
-            accumulated_rewards,
-            timestamp,
+            timestamp: chrono::Local::now().timestamp() as u64,
         };
-
-        let key = format!("delegation:{}:{}:{}", delegator, validator_id, timestamp);
-        let value = serde_json::to_vec(&record).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to serialize delegation record: {}", e))
-        })?;
-
-        self.db
-            .put(&self.cf_delegation, key.as_bytes(), &value)
-            .map_err(|e| {
-                CoreError::InvalidData(format!("Failed to save delegation record: {}", e))
-            })?;
-
-        debug!(
-            "Saved delegation record: {} -> {} (amount: {})",
-            delegator, validator_id, amount
-        );
-
+        
+        let data = bincode::serialize(&record)?;
+        let key = format!("validator_stake:{}", hex::encode(&validator[..])).into_bytes();
+        self.db.put(crate::db::CF_OBJECTS, &key, &data)?;
+        
         Ok(())
     }
 
-    /// Get delegation history for delegator
-    pub fn get_delegation_history(
-        &self,
-        delegator: &str,
-        limit: usize,
-    ) -> CoreResult<Vec<PersistedDelegationRecord>> {
-        let prefix = format!("delegation:{}:", delegator);
-        let mut records = Vec::new();
-
-        let iter = self.db.iter(
-            &self.cf_delegation,
-            rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Reverse),
-        );
-
-        for result in iter {
-            if let Ok((key, value)) = result {
-                let key_str = String::from_utf8_lossy(&key);
-                if !key_str.starts_with(&prefix) {
-                    break;
-                }
-
-                if let Ok(record) = serde_json::from_slice::<PersistedDelegationRecord>(&value) {
-                    records.push(record);
-                    if records.len() >= limit {
-                        break;
+    /// Get delegations for validator
+    pub fn get_delegations_for_validator(&self, validator: &[u8; 32]) -> Result<Vec<PersistedDelegationRecord>> {
+        debug!("Getting delegations for validator: {:?}", validator);
+        
+        let mut delegations = Vec::new();
+        let validator_hex = hex::encode(&validator[..]);
+        let validator_delegation_index_key = format!("delegation_index:validator:{}", validator_hex).into_bytes();
+        
+        // Query the delegation index for all delegations to this validator
+        if let Ok(Some(index_data)) = self.db.get(crate::db::CF_OBJECTS, &validator_delegation_index_key) {
+            if let Ok(delegator_addrs) = bincode::deserialize::<Vec<[u8; 32]>>(&index_data) {
+                for delegator in delegator_addrs {
+                    let key = format!(
+                        "delegation:{}:{}",
+                        validator_hex,
+                        hex::encode(&delegator[..])
+                    ).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(crate::db::CF_OBJECTS, &key) {
+                        if let Ok(record) = bincode::deserialize::<PersistedDelegationRecord>(&data) {
+                            delegations.push(record);
+                        }
                     }
                 }
             }
         }
-
-        Ok(records)
+        
+        debug!("Retrieved {} delegations for validator {:?}", delegations.len(), validator);
+        Ok(delegations)
     }
 
-    /// Save reward record
-    pub fn save_reward_record(
-        &self,
-        validator_id: &ValidatorID,
-        cycle: u64,
-        reward_amount: u64,
-        stake_weight: f64,
-        participation_rate: f64,
-    ) -> CoreResult<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let record = PersistedRewardRecord {
-            validator_id: validator_id.to_string(),
-            cycle,
-            reward_amount,
-            stake_weight,
-            participation_rate,
-            timestamp,
-        };
-
-        let key = format!("rewards:{}:{}", validator_id, cycle);
-        let value = serde_json::to_vec(&record).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to serialize reward record: {}", e))
-        })?;
-
-        self.db
-            .put(&self.cf_rewards, key.as_bytes(), &value)
-            .map_err(|e| CoreError::InvalidData(format!("Failed to save reward record: {}", e)))?;
-
-        debug!(
-            "Saved reward record for validator {} cycle {} (amount: {})",
-            validator_id, cycle, reward_amount
-        );
-
-        Ok(())
-    }
-
-    /// Get reward history for validator
-    pub fn get_reward_history(
-        &self,
-        validator_id: &ValidatorID,
-        limit: usize,
-    ) -> CoreResult<Vec<PersistedRewardRecord>> {
-        let prefix = format!("rewards:{}:", validator_id);
-        let mut records = Vec::new();
-
-        let iter = self.db.iter(
-            &self.cf_rewards,
-            rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Reverse),
-        );
-
-        for result in iter {
-            if let Ok((key, value)) = result {
-                let key_str = String::from_utf8_lossy(&key);
-                if !key_str.starts_with(&prefix) {
-                    break;
-                }
-
-                if let Ok(record) = serde_json::from_slice::<PersistedRewardRecord>(&value) {
-                    records.push(record);
-                    if records.len() >= limit {
-                        break;
+    /// Get delegations by delegator
+    pub fn get_delegations_by_delegator(&self, delegator: &[u8; 32]) -> Result<Vec<PersistedDelegationRecord>> {
+        debug!("Getting delegations by delegator: {:?}", delegator);
+        
+        let mut delegations = Vec::new();
+        let delegator_hex = hex::encode(&delegator[..]);
+        let delegator_delegation_index_key = format!("delegation_index:delegator:{}", delegator_hex).into_bytes();
+        
+        // Query the delegator index for all delegations from this delegator
+        if let Ok(Some(index_data)) = self.db.get(crate::db::CF_OBJECTS, &delegator_delegation_index_key) {
+            if let Ok(validator_addrs) = bincode::deserialize::<Vec<[u8; 32]>>(&index_data) {
+                for validator in validator_addrs {
+                    let key = format!(
+                        "delegation:{}:{}",
+                        hex::encode(&validator[..]),
+                        delegator_hex
+                    ).into_bytes();
+                    if let Ok(Some(data)) = self.db.get(crate::db::CF_OBJECTS, &key) {
+                        if let Ok(record) = bincode::deserialize::<PersistedDelegationRecord>(&data) {
+                            delegations.push(record);
+                        }
                     }
                 }
             }
         }
-
-        Ok(records)
+        
+        debug!("Retrieved {} delegations from delegator {:?}", delegations.len(), delegator);
+        Ok(delegations)
     }
+}
 
-    /// Save validator set change event
-    pub fn save_change_event(&self, event: &ValidatorSetChangeEvent) -> CoreResult<()> {
-        let key = format!("changes:{}:{}", event.cycle, event.timestamp);
-        let value = serde_json::to_vec(event).map_err(|e| {
-            CoreError::InvalidData(format!("Failed to serialize change event: {}", e))
-        })?;
-
-        self.db
-            .put(&self.cf_changes, key.as_bytes(), &value)
-            .map_err(|e| CoreError::InvalidData(format!("Failed to save change event: {}", e)))?;
-
-        debug!(
-            "Saved change event for cycle {} (added: {}, removed: {})",
-            event.cycle,
-            event.added_validators.len(),
-            event.removed_validators.len()
-        );
-
-        Ok(())
-    }
-
-    /// Get change events for cycle
-    pub fn get_cycle_changes(&self, cycle: u64) -> CoreResult<Vec<ValidatorSetChangeEvent>> {
-        let prefix = format!("changes:{}:", cycle);
-        let mut events = Vec::new();
-
-        let iter = self.db.iter(
-            &self.cf_changes,
-            rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward),
-        );
-
-        for result in iter {
-            if let Ok((key, value)) = result {
-                let key_str = String::from_utf8_lossy(&key);
-                if !key_str.starts_with(&prefix) {
-                    break;
-                }
-
-                if let Ok(event) = serde_json::from_slice::<ValidatorSetChangeEvent>(&value) {
-                    events.push(event);
-                }
-            }
+impl Clone for ValidatorStore {
+    fn clone(&self) -> Self {
+        Self {
+            db: Arc::clone(&self.db),
         }
-
-        Ok(events)
-    }
-
-    /// Get all change events
-    pub fn get_all_changes(&self) -> CoreResult<Vec<ValidatorSetChangeEvent>> {
-        let mut events = Vec::new();
-
-        let iter = self.db.iter(&self.cf_changes, rocksdb::IteratorMode::Start);
-
-        for result in iter {
-            if let Ok((_, value)) = result {
-                if let Ok(event) = serde_json::from_slice::<ValidatorSetChangeEvent>(&value) {
-                    events.push(event);
-                }
-            }
-        }
-
-        Ok(events)
-    }
-
-    /// Flush all pending writes to disk
-    pub fn flush(&self) -> CoreResult<()> {
-        self.db
-            .flush()
-            .map_err(|e| CoreError::InvalidData(format!("Failed to flush: {}", e)))
-    }
-
-    /// Compact database
-    pub fn compact(&self) -> CoreResult<()> {
-        self.db
-            .compact("validator_set")
-            .map_err(|e| CoreError::InvalidData(format!("Failed to compact: {}", e)))
-    }
-
-    /// Get database statistics
-    pub fn get_statistics(&self) -> CoreResult<String> {
-        self.db
-            .get_statistics()
-            .ok_or_else(|| CoreError::InvalidData("Failed to get statistics".to_string()))
     }
 }
