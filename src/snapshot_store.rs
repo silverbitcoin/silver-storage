@@ -58,12 +58,13 @@ impl SnapshotStore {
         Self { db }
     }
 
-    /// Store a snapshot persistently
+    /// Store a snapshot persistently using bincode 2.0 API
     pub fn store_snapshot(&self, snapshot: &Snapshot) -> Result<()> {
         debug!("Storing snapshot #{}", snapshot.sequence_number);
         
-        // Serialize snapshot
-        let snapshot_data = bincode::serialize(snapshot)?;
+        // Serialize snapshot using bincode 2.0 API
+        let snapshot_data = serde_json::to_vec(snapshot)
+            .map_err(crate::error::Error::Serialization)?;
         
         // Store by sequence number as key
         let key = format!("snapshot:{}", snapshot.sequence_number).into_bytes();
@@ -76,7 +77,7 @@ impl SnapshotStore {
         Ok(())
     }
 
-    /// Get snapshot by sequence number
+    /// Get snapshot by sequence number using bincode 2.0 API
     pub fn get_snapshot(&self, sequence_number: u64) -> Result<Option<Snapshot>> {
         debug!("Retrieving snapshot #{}", sequence_number);
         
@@ -84,14 +85,15 @@ impl SnapshotStore {
         
         match self.db.get(CF_SNAPSHOTS, &key)? {
             Some(data) => {
-                let snapshot = bincode::deserialize(&data)?;
+                let snapshot = serde_json::from_slice::<Snapshot>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok(Some(snapshot))
             }
             None => Ok(None),
         }
     }
 
-    /// Get latest snapshot
+    /// Get latest snapshot using bincode 2.0 API
     pub fn get_latest_snapshot(&self) -> Result<Option<Snapshot>> {
         debug!("Retrieving latest snapshot");
         
@@ -99,7 +101,8 @@ impl SnapshotStore {
         
         match self.db.get(CF_SNAPSHOTS, &key)? {
             Some(data) => {
-                let snapshot = bincode::deserialize(&data)?;
+                let snapshot = serde_json::from_slice::<Snapshot>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok(Some(snapshot))
             }
             None => Ok(None),

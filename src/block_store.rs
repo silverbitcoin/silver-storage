@@ -102,7 +102,7 @@ impl BlockStore {
         debug!("Storing block #{} with hash {:?}", block.number, block.hash);
         
         // Serialize block
-        let block_data = bincode::serialize(block)?;
+        let block_data = serde_json::to_vec(block)?;
         
         // Store by block number as key
         let key = format!("block:{}", block.number).into_bytes();
@@ -123,7 +123,7 @@ impl BlockStore {
         
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
-                let block = bincode::deserialize(&data)?;
+                let block = serde_json::from_slice(&data)?;
                 Ok(Some(block))
             }
             None => Ok(None),
@@ -138,7 +138,7 @@ impl BlockStore {
         
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
-                let block = bincode::deserialize(&data)?;
+                let block = serde_json::from_slice(&data)?;
                 Ok(Some(block))
             }
             None => Ok(None),
@@ -149,8 +149,8 @@ impl BlockStore {
     pub fn get_blocks_by_hash(&self, hash: &str) -> Result<Vec<Block>> {
         debug!("Retrieving blocks by hash: {}", hash);
         
-        // Validate hash format (should be 64 hex characters for SHA256)
-        if hash.len() != 64 {
+        // Validate hash format (should be 128 hex characters for SHA512)
+        if hash.len() != 128 {
             return Ok(Vec::new());
         }
         
@@ -205,7 +205,7 @@ impl BlockStore {
         
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
-                let block = bincode::deserialize(&data)?;
+                let block = serde_json::from_slice(&data)?;
                 Ok(Some(block))
             }
             None => Ok(None),

@@ -122,12 +122,13 @@ impl TransactionStore {
         Self { db }
     }
 
-    /// Store a transaction persistently
+    /// Store a transaction persistently using bincode 2.0 API
     pub fn store_transaction(&self, tx: &StoredTransaction) -> Result<()> {
         debug!("Storing transaction with digest: {}", tx.digest.to_hex());
         
-        // Serialize transaction
-        let tx_data = bincode::serialize(tx)?;
+        // Serialize transaction using bincode 2.0 API
+        let tx_data = serde_json::to_vec(tx)
+            .map_err(crate::error::Error::Serialization)?;
         
         // Store by transaction digest as key
         let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
@@ -136,7 +137,7 @@ impl TransactionStore {
         Ok(())
     }
 
-    /// Get transaction by digest
+    /// Get transaction by digest using bincode 2.0 API
     pub fn get_transaction(&self, digest: &TransactionDigest) -> Result<Option<StoredTransaction>> {
         debug!("Retrieving transaction with digest: {}", digest.to_hex());
         
@@ -144,7 +145,8 @@ impl TransactionStore {
         
         match self.db.get(CF_TRANSACTIONS, &key)? {
             Some(data) => {
-                let tx = bincode::deserialize(&data)?;
+                let tx = serde_json::from_slice::<StoredTransaction>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok(Some(tx))
             }
             None => Ok(None),
@@ -157,7 +159,7 @@ impl TransactionStore {
         self.db.exists(CF_TRANSACTIONS, &key)
     }
 
-    /// Batch store multiple transactions atomically
+    /// Batch store multiple transactions atomically using bincode 2.0 API
     pub fn batch_store_transactions(&self, transactions: &[StoredTransaction]) -> Result<()> {
         debug!("Batch storing {} transactions", transactions.len());
         
@@ -165,7 +167,8 @@ impl TransactionStore {
             .iter()
             .map(|tx| {
                 let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
-                let value = bincode::serialize(tx)?;
+                let value = serde_json::to_vec(tx)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok((key, value))
             })
             .collect();
@@ -191,7 +194,7 @@ impl TransactionStore {
         self.db.get_transaction_count()
     }
 
-    /// Iterate all transactions
+    /// Iterate all transactions using bincode 2.0 API
     pub fn iterate_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Iterating all transactions");
         
@@ -200,11 +203,11 @@ impl TransactionStore {
         // Query the transaction index to get all transaction digests
         let tx_index_key = b"tx_index:all".to_vec();
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &tx_index_key) {
-            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+            if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
                 for tx_digest in tx_digests {
                     let key = format!("tx:{}", tx_digest).into_bytes();
                     if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
-                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                        if let Ok(tx) = serde_json::from_slice::<StoredTransaction>(&data) {
                             transactions.push(tx);
                         }
                     }
@@ -216,7 +219,7 @@ impl TransactionStore {
         Ok(transactions)
     }
 
-    /// Get transactions by sender address
+    /// Get transactions by sender address using bincode 2.0 API
     pub fn get_transactions_by_sender(&self, sender: &[u8]) -> Result<Vec<StoredTransaction>> {
         debug!("Getting transactions by sender: {:?}", sender);
         
@@ -226,11 +229,11 @@ impl TransactionStore {
         
         // Query the sender_index for all transactions from this sender
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &sender_index_key) {
-            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+            if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
                 for tx_digest in tx_digests {
                     let key = format!("tx:{}", tx_digest).into_bytes();
                     if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
-                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                        if let Ok(tx) = serde_json::from_slice::<StoredTransaction>(&data) {
                             transactions.push(tx);
                         }
                     }
@@ -242,7 +245,7 @@ impl TransactionStore {
         Ok(transactions)
     }
 
-    /// Get transactions by recipient address
+    /// Get transactions by recipient address using bincode 2.0 API
     pub fn get_transactions_by_recipient(&self, recipient: &[u8]) -> Result<Vec<StoredTransaction>> {
         debug!("Getting transactions by recipient: {:?}", recipient);
         
@@ -252,11 +255,11 @@ impl TransactionStore {
         
         // Query the recipient_index for all transactions to this recipient
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &recipient_index_key) {
-            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+            if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
                 for tx_digest in tx_digests {
                     let key = format!("tx:{}", tx_digest).into_bytes();
                     if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
-                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                        if let Ok(tx) = serde_json::from_slice::<StoredTransaction>(&data) {
                             transactions.push(tx);
                         }
                     }
@@ -268,7 +271,7 @@ impl TransactionStore {
         Ok(transactions)
     }
 
-    /// Get pending transactions (not yet executed)
+    /// Get pending transactions (not yet executed) using bincode 2.0 API
     pub fn get_pending_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Getting pending transactions");
         
@@ -277,11 +280,11 @@ impl TransactionStore {
         
         // Query the pending_index for all pending transactions
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &pending_index_key) {
-            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+            if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
                 for tx_digest in tx_digests {
                     let key = format!("tx:{}", tx_digest).into_bytes();
                     if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
-                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                        if let Ok(tx) = serde_json::from_slice::<StoredTransaction>(&data) {
                             if tx.effects.status == ExecutionStatus::Pending {
                                 pending.push(tx);
                             }
@@ -295,7 +298,7 @@ impl TransactionStore {
         Ok(pending)
     }
 
-    /// Get failed transactions
+    /// Get failed transactions using bincode 2.0 API
     pub fn get_failed_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Getting failed transactions");
         
@@ -304,11 +307,11 @@ impl TransactionStore {
         
         // Query the failed_index for all failed transactions
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &failed_index_key) {
-            if let Ok(tx_digests) = bincode::deserialize::<Vec<String>>(&index_data) {
+            if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
                 for tx_digest in tx_digests {
                     let key = format!("tx:{}", tx_digest).into_bytes();
                     if let Ok(Some(data)) = self.db.get(CF_TRANSACTIONS, &key) {
-                        if let Ok(tx) = bincode::deserialize::<StoredTransaction>(&data) {
+                        if let Ok(tx) = serde_json::from_slice::<StoredTransaction>(&data) {
                             if tx.effects.status == ExecutionStatus::Failed {
                                 failed.push(tx);
                             }

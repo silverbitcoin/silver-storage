@@ -1,45 +1,46 @@
 [package]
 name = "silver-storage"
 version = "2.5.3"
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "RocksDB-based persistent storage for SilverBitcoin blockchain"
+edition = "2021"
+rust-version = "1.90"
+authors = ["SilverBitcoin Team <team@silverbitcoin.org>"]
+license = "Apache-2.0"
+repository = "https://github.com/silverbitcoin/silverbitcoin"
+homepage = "https://silverbitcoin.org"
+keywords = ["blockchain", "cryptocurrency", "quantum-resistant", "consensus"]
+categories = ["cryptography", "network-programming"]
+description = "ParityDB-based persistent storage for SilverBitcoin 512-bit blockchain"
 
 [dependencies]
 # Core
 silver-core = { path = "../silver-core" }
 
-# Workspace dependencies
-tokio = { workspace = true }
-async-trait = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-bincode = { workspace = true }
-bcs = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-bytes = { workspace = true }
-parking_lot = { workspace = true }
-dashmap = { workspace = true }
-hex = { workspace = true }
+# Async runtime
+tokio = { version = "1.48", features = ["full", "tracing"] }
+async-trait = "0.1"
 
-# Storage
-parity-db = { workspace = true }
-lz4 = { workspace = true }
+# Serialization (512-bit blockchain storage)
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+bytes = "1.5"
+parking_lot = "0.12"
+dashmap = "5.5"
+hex = "0.4"
 
-# Cryptography
-sha3 = { workspace = true }
+# Storage (512-bit blockchain)
+parity-db = "0.4"
+lz4 = "1.24"
 
 # Time
-chrono = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
 
 # System
 num_cpus = "1.16"
 sysinfo = "0.30"
 
 [dev-dependencies]
-proptest = { workspace = true }
-criterion = { workspace = true }
-tempfile = { workspace = true }
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+tempfile = "3.8"

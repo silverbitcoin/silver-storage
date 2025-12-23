@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod db;
+pub mod db_production;
 pub mod error;
 pub mod object_store;
 pub mod token_store;
@@ -20,10 +21,9 @@ pub mod event_store;
 pub mod block_store;
 pub mod transaction_store;
 pub mod snapshot_store;
-pub mod validator_store;
-pub mod staking_store;
+pub mod mining_store;
 
-pub use db::{ParityDatabase, DatabaseStatistics};
+pub use db::{ParityDatabase, DatabaseStatistics, CF_SNAPSHOTS};
 pub use error::{Error, Result};
 pub use object_store::ObjectStore;
 pub use token_store::TokenStore;
@@ -31,5 +31,4 @@ pub use event_store::{EventStore, EventType, EventID, Event};
 pub use block_store::{Block, BlockStore};
 pub use transaction_store::{StoredTransaction, TransactionStore, ExecutionStatus, TransactionEffects};
 pub use snapshot_store::SnapshotStore;
-pub use validator_store::ValidatorStore;
-pub use staking_store::{StakingStore, StakingRecord, DelegationRecord, RewardRecord, UnbondingRecord};
+pub use mining_store::{MiningStore, DifficultyRecord, MiningRewardRecord, MinerStats};

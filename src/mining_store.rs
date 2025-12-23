@@ -143,7 +143,8 @@ impl MiningStore {
             record.chain_id, record.block_height
         );
 
-        let data = bincode::serialize(record)?;
+        let data = serde_json::to_vec(record)
+            .map_err(crate::error::Error::Serialization)?;
         let key = format!("difficulty:{}:{}", record.chain_id, record.block_height).into_bytes();
         self.db.put(CF_OBJECTS, &key, &data)?;
 
@@ -154,7 +155,7 @@ impl MiningStore {
         Ok(())
     }
 
-    /// Get latest difficulty for chain
+    /// Get latest difficulty for chain using bincode 2.0 API
     pub fn get_latest_difficulty(&self, chain_id: u32) -> Result<Option<DifficultyRecord>> {
         debug!("Retrieving latest difficulty for chain {}", chain_id);
 
@@ -162,7 +163,8 @@ impl MiningStore {
 
         match self.db.get(CF_OBJECTS, &key)? {
             Some(data) => {
-                let record = bincode::deserialize(&data)?;
+                let record = serde_json::from_slice::<DifficultyRecord>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok(Some(record))
             }
             None => Ok(None),
@@ -184,7 +186,7 @@ impl MiningStore {
 
         match self.db.get(CF_OBJECTS, &key)? {
             Some(data) => {
-                let record = bincode::deserialize(&data)?;
+                let record = serde_json::from_slice(&data)?;
                 Ok(Some(record))
             }
             None => Ok(None),
@@ -198,7 +200,7 @@ impl MiningStore {
             record.chain_id, record.block_height
         );
 
-        let data = bincode::serialize(record)?;
+        let data = serde_json::to_vec(record)?;
         
         // PRODUCTION IMPLEMENTATION: Multi-key storage strategy for efficient querying
         // 1. Primary key: reward:chain_id:block_height:miner_address (for specific lookups)
@@ -314,7 +316,7 @@ impl MiningStore {
 
         match self.db.get(CF_OBJECTS, &key)? {
             Some(data) => {
-                let record = bincode::deserialize(&data)?;
+                let record = serde_json::from_slice(&data)?;
                 Ok(Some(record))
             }
             None => Ok(None),
@@ -325,7 +327,7 @@ impl MiningStore {
     pub fn store_miner_stats(&self, stats: &MinerStats) -> Result<()> {
         debug!("Storing miner stats for {}", hex::encode(&stats.miner_address));
 
-        let data = bincode::serialize(stats)?;
+        let data = serde_json::to_vec(stats)?;
         let key = format!("miner_stats:{}", hex::encode(&stats.miner_address)).into_bytes();
         self.db.put(CF_OBJECTS, &key, &data)?;
 
@@ -340,7 +342,7 @@ impl MiningStore {
 
         match self.db.get(CF_OBJECTS, &key)? {
             Some(data) => {
-                let stats = bincode::deserialize(&data)?;
+                let stats = serde_json::from_slice(&data)?;
                 Ok(Some(stats))
             }
             None => Ok(None),
@@ -467,7 +469,7 @@ impl MiningStore {
             match self.db.get(CF_OBJECTS, &reward_key) {
                 Ok(Some(data)) => {
                     // Deserialize the reward record
-                    match bincode::deserialize::<MiningRewardRecord>(&data) {
+                    match serde_json::from_slice::<MiningRewardRecord>(&data) {
                         Ok(record) => {
                             // Verify chain_id matches (defensive check)
                             if record.chain_id == chain_id {

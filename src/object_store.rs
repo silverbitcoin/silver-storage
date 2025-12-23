@@ -31,12 +31,13 @@ impl ObjectStore {
         Self { db }
     }
 
-    /// Store an object
+    /// Store an object using bincode 2.0 API
     pub fn store_object(&self, object: &Object) -> Result<()> {
         debug!("Storing object: {}", object.id);
         
         let key = format!("obj:{}", object.id).into_bytes();
-        let value = bincode::serialize(object)?;
+        let value = serde_json::to_vec(object)
+            .map_err(crate::error::Error::Serialization)?;
         
         self.db.put("objects", &key, &value)?;
         
@@ -47,7 +48,7 @@ impl ObjectStore {
         
         // Load existing index
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
-            if let Ok(existing_ids) = bincode::deserialize::<Vec<ObjectID>>(&index_data) {
+            if let Ok(existing_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 object_ids = existing_ids;
             }
         }
@@ -58,13 +59,14 @@ impl ObjectStore {
         }
         
         // Store updated index
-        let index_value = bincode::serialize(&object_ids)?;
+        let index_value = serde_json::to_vec(&object_ids)
+            .map_err(crate::error::Error::Serialization)?;
         self.db.put("objects", &all_objects_index_key, &index_value)?;
         
         Ok(())
     }
 
-    /// Get an object by ID
+    /// Get an object by ID using bincode 2.0 API
     pub fn get_object(&self, object_id: &ObjectID) -> Result<Option<Object>> {
         debug!("Retrieving object: {}", object_id);
         
@@ -72,14 +74,15 @@ impl ObjectStore {
         
         match self.db.get("objects", &key)? {
             Some(data) => {
-                let object = bincode::deserialize(&data)?;
+                let object = serde_json::from_slice::<Object>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 Ok(Some(object))
             }
             None => Ok(None),
         }
     }
 
-    /// Delete an object
+    /// Delete an object using bincode 2.0 API
     pub fn delete_object(&self, object_id: &ObjectID) -> Result<()> {
         debug!("Deleting object: {}", object_id);
         
@@ -90,12 +93,13 @@ impl ObjectStore {
         let all_objects_index_key = b"all_objects_index".to_vec();
         
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
-            if let Ok(mut object_ids) = bincode::deserialize::<Vec<ObjectID>>(&index_data) {
+            if let Ok(mut object_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 // Remove this object ID from the index
                 object_ids.retain(|id| id != object_id);
                 
                 // Store updated index
-                let index_value = bincode::serialize(&object_ids)?;
+                let index_value = serde_json::to_vec(&object_ids)
+                    .map_err(crate::error::Error::Serialization)?;
                 self.db.put("objects", &all_objects_index_key, &index_value)?;
             }
         }
@@ -117,7 +121,7 @@ impl ObjectStore {
         Ok(())
     }
 
-    /// Get objects by owner
+    /// Get objects by owner using bincode 2.0 API
     pub fn get_objects_by_owner(&self, owner: &silver_core::SilverAddress) -> Result<Vec<silver_core::Object>> {
         debug!("Retrieving objects for owner: {}", owner);
         
@@ -132,13 +136,15 @@ impl ObjectStore {
         match self.db.get("owner_index", owner_index_key.as_bytes()) {
             Ok(Some(value)) => {
                 // Deserialize the list of object IDs owned by this owner
-                let object_ids: Vec<silver_core::ObjectID> = bincode::deserialize(&value)?;
+                let object_ids: Vec<silver_core::ObjectID> = serde_json::from_slice(&value)
+                    .map_err(crate::error::Error::Serialization)?;
                 
                 // Retrieve each object from the main object store
                 for object_id in object_ids {
                     let obj_key = format!("obj:{}", object_id);
                     if let Ok(Some(obj_bytes)) = self.db.get("objects", obj_key.as_bytes()) {
-                        let object: silver_core::Object = bincode::deserialize(&obj_bytes)?;
+                        let object: silver_core::Object = serde_json::from_slice(&obj_bytes)
+                            .map_err(crate::error::Error::Serialization)?;
                         objects.push(object);
                     }
                 }
@@ -165,7 +171,7 @@ impl ObjectStore {
         Ok(objects)
     }
 
-    /// Iterate all objects
+    /// Iterate all objects using bincode 2.0 API
     pub fn iterate_all_objects(&self) -> Result<Vec<silver_core::Object>> {
         debug!("Iterating all objects");
         
@@ -177,14 +183,14 @@ impl ObjectStore {
         
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
             // Deserialize the list of all object IDs
-            if let Ok(object_ids) = bincode::deserialize::<Vec<ObjectID>>(&index_data) {
+            if let Ok(object_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 for object_id in object_ids {
                     // Retrieve each object from storage
                     let key = format!("obj:{}", object_id).into_bytes();
                     
                     match self.db.get("objects", &key) {
                         Ok(Some(data)) => {
-                            match bincode::deserialize::<silver_core::Object>(&data) {
+                            match serde_json::from_slice::<silver_core::Object>(&data) {
                                 Ok(object) => {
                                     objects.push(object);
                                 }
@@ -208,7 +214,7 @@ impl ObjectStore {
         Ok(objects)
     }
 
-    /// Get object history
+    /// Get object history using bincode 2.0 API
     pub fn get_object_history(&self, object_id: &ObjectID) -> Result<Vec<silver_core::Object>> {
         debug!("Retrieving history for object: {}", object_id);
         
@@ -218,11 +224,11 @@ impl ObjectStore {
         
         // Query the history index for all versions of this object
         if let Ok(Some(index_data)) = self.db.get("object_history", &history_index_key) {
-            if let Ok(versions) = bincode::deserialize::<Vec<u64>>(&index_data) {
+            if let Ok(versions) = serde_json::from_slice::<Vec<u64>>(&index_data) {
                 for version in versions {
                     let key = format!("history:{}:{}", object_id_str, version).into_bytes();
                     if let Ok(Some(data)) = self.db.get("object_history", &key) {
-                        if let Ok(object) = bincode::deserialize::<silver_core::Object>(&data) {
+                        if let Ok(object) = serde_json::from_slice::<silver_core::Object>(&data) {
                             history.push(object);
                         }
                     }
@@ -237,7 +243,7 @@ impl ObjectStore {
         Ok(history)
     }
 
-    /// Get sender's public key
+    /// Get sender's public key using bincode 2.0 API
     pub fn get_sender_public_key(&self, sender: &silver_core::SilverAddress) -> Result<silver_core::PublicKey> {
         debug!("Retrieving public key for sender: {}", sender);
         
@@ -245,7 +251,8 @@ impl ObjectStore {
         
         match self.db.get("objects", &key)? {
             Some(data) => {
-                let pubkey = bincode::deserialize::<silver_core::PublicKey>(&data)?;
+                let pubkey = serde_json::from_slice::<silver_core::PublicKey>(&data)
+                    .map_err(crate::error::Error::Serialization)?;
                 debug!("Retrieved public key for sender {}", sender);
                 Ok(pubkey)
             }

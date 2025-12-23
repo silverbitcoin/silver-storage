@@ -11,7 +11,7 @@ pub enum Error {
 
     /// Serialization error
     #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::Error),
+    Serialization(#[from] serde_json::Error),
 
     /// Data not found
     #[error("Data not found: {0}")]
