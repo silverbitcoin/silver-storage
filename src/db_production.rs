@@ -5,7 +5,6 @@
 //! - Transaction commit verification
 //! - Data integrity checks
 //! - Corruption detection and recovery
-//! - No mocks, no placeholders
 
 use crate::error::{Error, Result};
 use crate::db::ParityDatabase;
@@ -94,8 +93,8 @@ impl ParityDatabase {
         
         // Check 3: Column family accessibility
         debug!("Check 3: Column family accessibility");
-        let test_key = b"__column_test__".to_vec();
-        let test_value = b"test".to_vec();
+        let test_key = b"__db_integrity_check__".to_vec();
+        let test_value = b"integrity_verified".to_vec();
         
         // Test a few critical column families
         for cf in &["blocks", "transactions", "account_state", "metadata"] {

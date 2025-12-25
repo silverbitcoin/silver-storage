@@ -64,7 +64,6 @@ const COLUMN_FAMILIES: &[&str] = &[
 /// ParityDB-based database wrapper for production blockchain storage
 ///
 /// This is a real, production-ready implementation using ParityDB,
-/// which is specifically designed for blockchain systems like Polkadot and Substrate.
 /// 
 /// Features:
 /// - ACID transactions with atomic commits
