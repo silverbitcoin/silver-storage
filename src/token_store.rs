@@ -2,8 +2,8 @@
 
 use crate::error::Result;
 use silver_core::{
-    SilverAddress, TokenState, TokenMetadata, TokenTransferEvent, TokenApprovalEvent,
-    TokenMintEvent, TokenBurnEvent, TransactionDigest,
+    SilverAddress, TokenApprovalEvent, TokenBurnEvent, TokenMetadata, TokenMintEvent, TokenState,
+    TokenTransferEvent, TransactionDigest,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -72,16 +72,16 @@ impl TokenStore {
         let metadata = state.metadata.clone();
         tokens.insert(contract_address, state);
 
-        debug!("Created token contract: {} ({})", contract_address, metadata.symbol);
+        debug!(
+            "Created token contract: {} ({})",
+            contract_address, metadata.symbol
+        );
 
         Ok(metadata)
     }
 
     /// Get token metadata
-    pub fn get_token_metadata(
-        &self,
-        contract_address: &SilverAddress,
-    ) -> Result<TokenMetadata> {
+    pub fn get_token_metadata(&self, contract_address: &SilverAddress) -> Result<TokenMetadata> {
         let tokens = self.tokens.read().map_err(|e| {
             error!("Failed to acquire read lock on tokens: {}", e);
             crate::error::Error::InvalidData("Failed to acquire read lock".to_string())
@@ -91,7 +91,10 @@ impl TokenStore {
             .get(contract_address)
             .map(|state| state.metadata.clone())
             .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
+                crate::error::Error::NotFound(format!(
+                    "Token contract {} not found",
+                    contract_address
+                ))
             })
     }
 
@@ -106,11 +109,9 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire read lock".to_string())
         })?;
 
-        let state = tokens
-            .get(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
+        let state = tokens.get(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
+        })?;
 
         Ok(state.balance_of(account))
     }
@@ -127,11 +128,9 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire read lock".to_string())
         })?;
 
-        let state = tokens
-            .get(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
+        let state = tokens.get(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
+        })?;
 
         Ok(state.allowance(owner, spender))
     }
@@ -151,15 +150,13 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire write lock".to_string())
         })?;
 
-        let state = tokens
-            .get_mut(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
-
-        state.transfer(from, to, amount).map_err(|e| {
-            crate::error::Error::InvalidData(format!("Transfer failed: {}", e))
+        let state = tokens.get_mut(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
         })?;
+
+        state
+            .transfer(from, to, amount)
+            .map_err(|e| crate::error::Error::InvalidData(format!("Transfer failed: {}", e)))?;
 
         let event = TokenTransferEvent {
             token: *contract_address,
@@ -178,10 +175,7 @@ impl TokenStore {
 
         events.push(event);
 
-        debug!(
-            "Token transfer: {} -> {} amount: {}",
-            from, to, amount
-        );
+        debug!("Token transfer: {} -> {} amount: {}", from, to, amount);
 
         Ok(())
     }
@@ -202,15 +196,15 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire write lock".to_string())
         })?;
 
-        let state = tokens
-            .get_mut(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
+        let state = tokens.get_mut(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
+        })?;
 
         state
             .transfer_from(owner, spender, to, amount)
-            .map_err(|e| crate::error::Error::InvalidData(format!("Transfer from failed: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::InvalidData(format!("Transfer from failed: {}", e))
+            })?;
 
         let event = TokenTransferEvent {
             token: *contract_address,
@@ -252,15 +246,13 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire write lock".to_string())
         })?;
 
-        let state = tokens
-            .get_mut(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
-
-        state.approve(owner, spender, amount).map_err(|e| {
-            crate::error::Error::InvalidData(format!("Approval failed: {}", e))
+        let state = tokens.get_mut(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
         })?;
+
+        state
+            .approve(owner, spender, amount)
+            .map_err(|e| crate::error::Error::InvalidData(format!("Approval failed: {}", e)))?;
 
         let event = TokenApprovalEvent {
             token: *contract_address,
@@ -279,7 +271,10 @@ impl TokenStore {
 
         events.push(event);
 
-        debug!("Token approval: {} -> {} amount: {}", owner, spender, amount);
+        debug!(
+            "Token approval: {} -> {} amount: {}",
+            owner, spender, amount
+        );
 
         Ok(())
     }
@@ -298,15 +293,13 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire write lock".to_string())
         })?;
 
-        let state = tokens
-            .get_mut(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
-
-        state.mint(to, amount).map_err(|e| {
-            crate::error::Error::InvalidData(format!("Mint failed: {}", e))
+        let state = tokens.get_mut(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
         })?;
+
+        state
+            .mint(to, amount)
+            .map_err(|e| crate::error::Error::InvalidData(format!("Mint failed: {}", e)))?;
 
         let event = TokenMintEvent {
             token: *contract_address,
@@ -343,15 +336,13 @@ impl TokenStore {
             crate::error::Error::InvalidData("Failed to acquire write lock".to_string())
         })?;
 
-        let state = tokens
-            .get_mut(contract_address)
-            .ok_or_else(|| {
-                crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
-            })?;
-
-        state.burn(from, amount).map_err(|e| {
-            crate::error::Error::InvalidData(format!("Burn failed: {}", e))
+        let state = tokens.get_mut(contract_address).ok_or_else(|| {
+            crate::error::Error::NotFound(format!("Token contract {} not found", contract_address))
         })?;
+
+        state
+            .burn(from, amount)
+            .map_err(|e| crate::error::Error::InvalidData(format!("Burn failed: {}", e)))?;
 
         let event = TokenBurnEvent {
             token: *contract_address,

@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Token metadata
@@ -186,15 +186,21 @@ impl TokenStorePersistent {
         debug!("Creating token: {} ({})", metadata.name, metadata.symbol);
 
         // Serialize metadata
-        let metadata_data = serde_json::to_vec(metadata)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let metadata_data =
+            serde_json::to_vec(metadata).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, metadata.storage_key().as_bytes(), &metadata_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            metadata.storage_key().as_bytes(),
+            &metadata_data,
+        )?;
 
         // Update cache
         let contract_hex = hex::encode(&metadata.contract_address);
-        self.metadata_cache.write().insert(contract_hex.clone(), metadata.clone());
+        self.metadata_cache
+            .write()
+            .insert(contract_hex.clone(), metadata.clone());
 
         // Add to token index
         let token_index_key = "token:index:all";
@@ -203,7 +209,8 @@ impl TokenStorePersistent {
             token_list.push(contract_hex);
             let list_data = serde_json::to_vec(&token_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, token_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, token_index_key.as_bytes(), &list_data)?;
         }
 
         // Initialize creator balance with total supply
@@ -229,7 +236,10 @@ impl TokenStorePersistent {
     /// * `Ok(None)` if not found
     /// * `Err(Error)` if retrieval fails
     pub fn get_token_metadata(&self, contract_address: &[u8]) -> Result<Option<TokenMetadata>> {
-        debug!("Retrieving token metadata: {}", hex::encode(contract_address));
+        debug!(
+            "Retrieving token metadata: {}",
+            hex::encode(contract_address)
+        );
 
         let contract_hex = hex::encode(contract_address);
 
@@ -244,9 +254,11 @@ impl TokenStorePersistent {
             Some(data) => {
                 let metadata: TokenMetadata = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
-                self.metadata_cache.write().insert(contract_hex, metadata.clone());
+                self.metadata_cache
+                    .write()
+                    .insert(contract_hex, metadata.clone());
                 Ok(Some(metadata))
             }
             None => Ok(None),
@@ -286,9 +298,11 @@ impl TokenStorePersistent {
             Some(data) => {
                 let balance_entry: TokenBalance = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
-                self.balance_cache.write().insert(cache_key, balance_entry.balance);
+                self.balance_cache
+                    .write()
+                    .insert(cache_key, balance_entry.balance);
                 Ok(balance_entry.balance)
             }
             None => Ok(0),
@@ -311,11 +325,15 @@ impl TokenStorePersistent {
         );
 
         // Serialize balance
-        let balance_data = serde_json::to_vec(balance)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let balance_data =
+            serde_json::to_vec(balance).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, balance.storage_key().as_bytes(), &balance_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            balance.storage_key().as_bytes(),
+            &balance_data,
+        )?;
 
         // Update cache
         let cache_key = format!(
@@ -323,7 +341,9 @@ impl TokenStorePersistent {
             hex::encode(&balance.contract_address),
             hex::encode(&balance.account)
         );
-        self.balance_cache.write().insert(cache_key, balance.balance);
+        self.balance_cache
+            .write()
+            .insert(cache_key, balance.balance);
 
         info!(
             "Balance set for account: {} in token: {}",
@@ -343,7 +363,12 @@ impl TokenStorePersistent {
     /// # Returns
     /// * `Ok(u128)` - Allowance amount
     /// * `Err(Error)` if operation fails
-    pub fn get_allowance(&self, contract_address: &[u8], owner: &[u8], spender: &[u8]) -> Result<u128> {
+    pub fn get_allowance(
+        &self,
+        contract_address: &[u8],
+        owner: &[u8],
+        spender: &[u8],
+    ) -> Result<u128> {
         debug!(
             "Getting allowance for spender: {} from owner: {} in token: {}",
             hex::encode(spender),
@@ -385,11 +410,15 @@ impl TokenStorePersistent {
         );
 
         // Serialize allowance
-        let allowance_data = serde_json::to_vec(allowance)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let allowance_data =
+            serde_json::to_vec(allowance).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, allowance.storage_key().as_bytes(), &allowance_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            allowance.storage_key().as_bytes(),
+            &allowance_data,
+        )?;
 
         info!(
             "Allowance set for spender: {} from owner: {} in token: {}",
@@ -416,11 +445,15 @@ impl TokenStorePersistent {
         );
 
         // Serialize event
-        let event_data = serde_json::to_vec(event)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let event_data =
+            serde_json::to_vec(event).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, event.storage_key().as_bytes(), &event_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            event.storage_key().as_bytes(),
+            &event_data,
+        )?;
 
         // Add to event index
         let event_index_key = format!("token:event_index:{}", hex::encode(&event.contract_address));
@@ -429,7 +462,8 @@ impl TokenStorePersistent {
             event_list.push(event.event_id);
             let list_data = serde_json::to_vec(&event_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, event_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, event_index_key.as_bytes(), &list_data)?;
         }
 
         info!(
@@ -461,11 +495,7 @@ impl TokenStorePersistent {
         let mut result = Vec::new();
 
         for event_id in event_ids.iter().rev().take(limit as usize) {
-            let key = format!(
-                "token:event:{}:{}",
-                hex::encode(contract_address),
-                event_id
-            );
+            let key = format!("token:event:{}:{}", hex::encode(contract_address), event_id);
             if let Ok(Some(data)) = self.db.get(CF_ACCOUNT_STATE, key.as_bytes()) {
                 if let Ok(event) = serde_json::from_slice::<TokenEvent>(&data) {
                     result.push(event);
@@ -489,7 +519,9 @@ impl TokenStorePersistent {
         let mut result = Vec::new();
 
         for address_hex in token_addresses {
-            if let Ok(Some(metadata)) = self.get_token_metadata(&hex::decode(&address_hex).unwrap_or_default()) {
+            if let Ok(Some(metadata)) =
+                self.get_token_metadata(&hex::decode(&address_hex).unwrap_or_default())
+            {
                 result.push(metadata);
             }
         }

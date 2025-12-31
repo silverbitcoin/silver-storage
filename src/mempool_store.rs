@@ -10,10 +10,10 @@
 
 use crate::db::{ParityDatabase, CF_MEMPOOL};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Mempool entry representing a pending transaction
@@ -139,7 +139,10 @@ impl MempoolStore {
 
     /// Create with custom max mempool size
     pub fn with_max_size(db: Arc<ParityDatabase>, max_size: u64) -> Self {
-        info!("Initializing MempoolStore with max size: {} bytes", max_size);
+        info!(
+            "Initializing MempoolStore with max size: {} bytes",
+            max_size
+        );
         Self {
             db,
             mempool_info_cache: Arc::new(RwLock::new(None)),
@@ -162,18 +165,24 @@ impl MempoolStore {
         // Check if transaction already exists
         if self.get_entry(&entry.txid)?.is_some() {
             warn!("Transaction already in mempool: {}", entry.txid);
-            return Err(Error::AlreadyExists(format!("Transaction already in mempool: {}", entry.txid)));
+            return Err(Error::AlreadyExists(format!(
+                "Transaction already in mempool: {}",
+                entry.txid
+            )));
         }
 
         // Serialize entry
-        let entry_data = serde_json::to_vec(entry)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let entry_data =
+            serde_json::to_vec(entry).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_MEMPOOL, entry.storage_key().as_bytes(), &entry_data)?;
+        self.db
+            .put(CF_MEMPOOL, entry.storage_key().as_bytes(), &entry_data)?;
 
         // Add to in-memory index
-        self.tx_index.write().insert(entry.txid.clone(), entry.clone());
+        self.tx_index
+            .write()
+            .insert(entry.txid.clone(), entry.clone());
 
         // Invalidate cache
         *self.mempool_info_cache.write() = None;
@@ -248,10 +257,7 @@ impl MempoolStore {
     pub fn list_transactions(&self) -> Result<Vec<String>> {
         debug!("Listing all mempool transactions");
 
-        let txids: Vec<String> = self.tx_index.read()
-            .keys()
-            .cloned()
-            .collect();
+        let txids: Vec<String> = self.tx_index.read().keys().cloned().collect();
 
         info!("Found {} transactions in mempool", txids.len());
         Ok(txids)
@@ -277,7 +283,8 @@ impl MempoolStore {
         let usage = bytes;
 
         let min_fee = if !tx_index.is_empty() {
-            tx_index.values()
+            tx_index
+                .values()
                 .map(|e| e.fee_rate)
                 .fold(f64::INFINITY, f64::min)
         } else {
@@ -313,10 +320,19 @@ impl MempoolStore {
     /// # Returns
     /// * `Ok(Vec<MempoolEntry>)` - Matching transactions
     /// * `Err(Error)` if operation fails
-    pub fn get_transactions_by_fee_rate(&self, min_rate: f64, max_rate: f64) -> Result<Vec<MempoolEntry>> {
-        debug!("Getting transactions with fee rate between {} and {}", min_rate, max_rate);
+    pub fn get_transactions_by_fee_rate(
+        &self,
+        min_rate: f64,
+        max_rate: f64,
+    ) -> Result<Vec<MempoolEntry>> {
+        debug!(
+            "Getting transactions with fee rate between {} and {}",
+            min_rate, max_rate
+        );
 
-        let entries: Vec<MempoolEntry> = self.tx_index.read()
+        let entries: Vec<MempoolEntry> = self
+            .tx_index
+            .read()
             .values()
             .filter(|e| e.fee_rate >= min_rate && e.fee_rate <= max_rate)
             .cloned()
@@ -336,17 +352,24 @@ impl MempoolStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if replacement fails
     pub fn replace_transaction(&self, old_txid: &str, new_entry: &MempoolEntry) -> Result<()> {
-        debug!("Replacing transaction: {} with {}", old_txid, new_entry.txid);
+        debug!(
+            "Replacing transaction: {} with {}",
+            old_txid, new_entry.txid
+        );
 
         // Check if old transaction exists and is replaceable
         if let Some(old_entry) = self.get_entry(old_txid)? {
             if !old_entry.replaceable {
-                return Err(Error::InvalidOperation("Transaction is not replaceable".to_string()));
+                return Err(Error::InvalidOperation(
+                    "Transaction is not replaceable".to_string(),
+                ));
             }
 
             // Check if new fee is higher
             if new_entry.fee <= old_entry.fee {
-                return Err(Error::InvalidOperation("New fee must be higher than old fee".to_string()));
+                return Err(Error::InvalidOperation(
+                    "New fee must be higher than old fee".to_string(),
+                ));
             }
 
             // Remove old transaction
@@ -358,16 +381,16 @@ impl MempoolStore {
             info!("Transaction replaced: {} -> {}", old_txid, new_entry.txid);
             Ok(())
         } else {
-            Err(Error::NotFound(format!("Transaction not found: {}", old_txid)))
+            Err(Error::NotFound(format!(
+                "Transaction not found: {}",
+                old_txid
+            )))
         }
     }
 
     /// Get mempool size in bytes
     fn get_mempool_size(&self) -> Result<u64> {
-        let size: u64 = self.tx_index.read()
-            .values()
-            .map(|e| e.size as u64)
-            .sum();
+        let size: u64 = self.tx_index.read().values().map(|e| e.size as u64).sum();
         Ok(size)
     }
 
@@ -375,13 +398,14 @@ impl MempoolStore {
     fn evict_low_priority(&self) -> Result<()> {
         debug!("Evicting low priority transactions");
 
-        let mut entries: Vec<_> = self.tx_index.read()
-            .values()
-            .cloned()
-            .collect();
+        let mut entries: Vec<_> = self.tx_index.read().values().cloned().collect();
 
         // Sort by priority (ascending - lowest priority first)
-        entries.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal));
+        entries.sort_by(|a, b| {
+            a.priority
+                .partial_cmp(&b.priority)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Remove lowest priority transactions until under limit
         let mut current_size = self.get_mempool_size()?;
@@ -406,14 +430,7 @@ mod tests {
 
     #[test]
     fn test_mempool_entry_creation() {
-        let entry = MempoolEntry::new(
-            "abc123".to_string(),
-            250,
-            2500,
-            1234567890,
-            100,
-            vec![],
-        );
+        let entry = MempoolEntry::new("abc123".to_string(), 250, 2500, 1234567890, 100, vec![]);
 
         assert_eq!(entry.txid, "abc123");
         assert_eq!(entry.size, 250);
@@ -423,14 +440,7 @@ mod tests {
 
     #[test]
     fn test_mempool_entry_storage_key() {
-        let entry = MempoolEntry::new(
-            "abc123".to_string(),
-            250,
-            2500,
-            1234567890,
-            100,
-            vec![],
-        );
+        let entry = MempoolEntry::new("abc123".to_string(), 250, 2500, 1234567890, 100, vec![]);
 
         assert_eq!(entry.storage_key(), "mempool:abc123");
     }

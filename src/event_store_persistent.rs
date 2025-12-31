@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_EVENTS};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Event type enumeration
@@ -126,17 +126,23 @@ impl EventStorePersistent {
     /// * `Ok(())` on success
     /// * `Err(Error)` if storage fails
     pub fn store_event(&self, event: &Event) -> Result<()> {
-        debug!("Storing event: {} (type: {:?})", event.event_id, event.event_type);
+        debug!(
+            "Storing event: {} (type: {:?})",
+            event.event_id, event.event_type
+        );
 
         // Serialize event
-        let event_data = serde_json::to_vec(event)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let event_data =
+            serde_json::to_vec(event).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_EVENTS, event.storage_key().as_bytes(), &event_data)?;
+        self.db
+            .put(CF_EVENTS, event.storage_key().as_bytes(), &event_data)?;
 
         // Update cache
-        self.event_cache.write().insert(event.event_id, event.clone());
+        self.event_cache
+            .write()
+            .insert(event.event_id, event.clone());
 
         // Add to transaction index
         let tx_index_key = format!("event_tx_index:{}", event.transaction_digest);
@@ -145,7 +151,8 @@ impl EventStorePersistent {
             tx_events.push(event.event_id);
             let list_data = serde_json::to_vec(&tx_events)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_EVENTS, tx_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_EVENTS, tx_index_key.as_bytes(), &list_data)?;
         }
 
         // Add to object index if applicable
@@ -156,7 +163,8 @@ impl EventStorePersistent {
                 obj_events.push(event.event_id);
                 let list_data = serde_json::to_vec(&obj_events)
                     .map_err(|e| Error::SerializationError(e.to_string()))?;
-                self.db.put(CF_EVENTS, obj_index_key.as_bytes(), &list_data)?;
+                self.db
+                    .put(CF_EVENTS, obj_index_key.as_bytes(), &list_data)?;
             }
         }
 
@@ -177,10 +185,14 @@ impl EventStorePersistent {
             all_events.push(event.event_id);
             let list_data = serde_json::to_vec(&all_events)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_EVENTS, global_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_EVENTS, global_index_key.as_bytes(), &list_data)?;
         }
 
-        info!("Event stored: {} (type: {:?})", event.event_id, event.event_type);
+        info!(
+            "Event stored: {} (type: {:?})",
+            event.event_id, event.event_type
+        );
         Ok(())
     }
 
@@ -207,7 +219,7 @@ impl EventStorePersistent {
             Some(data) => {
                 let event: Event = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
                 self.event_cache.write().insert(event_id, event.clone());
                 Ok(Some(event))
@@ -355,7 +367,8 @@ impl EventStorePersistent {
             if !tx_events.is_empty() {
                 let list_data = serde_json::to_vec(&tx_events)
                     .map_err(|e| Error::SerializationError(e.to_string()))?;
-                self.db.put(CF_EVENTS, tx_index_key.as_bytes(), &list_data)?;
+                self.db
+                    .put(CF_EVENTS, tx_index_key.as_bytes(), &list_data)?;
             } else {
                 self.db.delete(CF_EVENTS, tx_index_key.as_bytes())?;
             }
@@ -368,7 +381,8 @@ impl EventStorePersistent {
                 if !obj_events.is_empty() {
                     let list_data = serde_json::to_vec(&obj_events)
                         .map_err(|e| Error::SerializationError(e.to_string()))?;
-                    self.db.put(CF_EVENTS, obj_index_key.as_bytes(), &list_data)?;
+                    self.db
+                        .put(CF_EVENTS, obj_index_key.as_bytes(), &list_data)?;
                 } else {
                     self.db.delete(CF_EVENTS, obj_index_key.as_bytes())?;
                 }
@@ -380,7 +394,8 @@ impl EventStorePersistent {
             all_events.retain(|&id| id != event_id);
             let list_data = serde_json::to_vec(&all_events)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_EVENTS, global_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_EVENTS, global_index_key.as_bytes(), &list_data)?;
 
             info!("Event deleted: {}", event_id);
             Ok(())

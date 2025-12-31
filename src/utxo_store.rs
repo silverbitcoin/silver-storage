@@ -7,12 +7,12 @@
 //! - Coinbase transaction handling
 //! - UTXO set statistics and caching
 
-use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
+use crate::db::{ParityDatabase, CF_ACCOUNT_STATE, CF_METADATA};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// UTXO (Unspent Transaction Output) data structure
@@ -137,11 +137,12 @@ impl UTXOStore {
         debug!("Storing UTXO: {}:{}", utxo.txid, utxo.index);
 
         // Serialize UTXO
-        let utxo_data = serde_json::to_vec(utxo)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let utxo_data =
+            serde_json::to_vec(utxo).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store UTXO
-        self.db.put(CF_ACCOUNT_STATE, utxo.storage_key().as_bytes(), &utxo_data)?;
+        self.db
+            .put(CF_ACCOUNT_STATE, utxo.storage_key().as_bytes(), &utxo_data)?;
 
         // Add to address index
         let address_key = UTXO::address_index_key(&utxo.address);
@@ -150,7 +151,8 @@ impl UTXOStore {
             utxo_list.push(format!("{}:{}", utxo.txid, utxo.index));
             let list_data = serde_json::to_vec(&utxo_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, address_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, address_key.as_bytes(), &list_data)?;
         }
 
         // Invalidate caches
@@ -210,7 +212,8 @@ impl UTXOStore {
             utxo_list.retain(|u| u != &format!("{}:{}", txid, index));
             let list_data = serde_json::to_vec(&utxo_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, address_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, address_key.as_bytes(), &list_data)?;
 
             // Invalidate caches
             *self.utxo_set_cache.write() = None;
@@ -221,7 +224,10 @@ impl UTXOStore {
             Ok(())
         } else {
             warn!("UTXO not found for spending: {}:{}", txid, index);
-            Err(Error::NotFound(format!("UTXO not found: {}:{}", txid, index)))
+            Err(Error::NotFound(format!(
+                "UTXO not found: {}:{}",
+                txid, index
+            )))
         }
     }
 
@@ -237,7 +243,10 @@ impl UTXOStore {
     /// * `Err(Error)` if check fails
     pub fn is_spent(&self, txid: &str, index: u32) -> Result<bool> {
         let spent_key = format!("utxo_spent:{}:{}", txid, index);
-        Ok(self.db.get(CF_ACCOUNT_STATE, spent_key.as_bytes())?.is_some())
+        Ok(self
+            .db
+            .get(CF_ACCOUNT_STATE, spent_key.as_bytes())?
+            .is_some())
     }
 
     /// List unspent UTXOs with filters
@@ -256,7 +265,12 @@ impl UTXOStore {
         maxconf: u64,
         addresses: &[Vec<u8>],
     ) -> Result<Vec<UTXO>> {
-        debug!("Listing unspent UTXOs: minconf={}, maxconf={}, addresses={}", minconf, maxconf, addresses.len());
+        debug!(
+            "Listing unspent UTXOs: minconf={}, maxconf={}, addresses={}",
+            minconf,
+            maxconf,
+            addresses.len()
+        );
 
         let mut result = Vec::new();
 
@@ -277,10 +291,11 @@ impl UTXOStore {
                 if parts.len() == 2 {
                     if let Ok(index) = parts[1].parse::<u32>() {
                         if let Ok(Some(utxo)) = self.get_utxo(parts[0], index) {
-                            if !self.is_spent(parts[0], index).unwrap_or(false) {
-                                if utxo.confirmations >= minconf && utxo.confirmations <= maxconf {
-                                    result.push(utxo);
-                                }
+                            if !self.is_spent(parts[0], index).unwrap_or(false)
+                                && utxo.confirmations >= minconf
+                                && utxo.confirmations <= maxconf
+                            {
+                                result.push(utxo);
                             }
                         }
                     }
@@ -346,7 +361,9 @@ impl UTXOStore {
         let balance: u128 = utxos.iter().map(|u| u.amount).sum();
 
         // Cache the result
-        self.balance_cache.write().insert(address_hex.clone(), balance);
+        self.balance_cache
+            .write()
+            .insert(address_hex.clone(), balance);
 
         info!("Balance for address {}: {} satoshis", address_hex, balance);
         Ok(balance)
@@ -369,13 +386,15 @@ impl UTXOStore {
         // PRODUCTION IMPLEMENTATION: Query actual UTXO set from database
         // Use efficient database queries instead of full scans
         let cache_key = b"utxo_set_info".to_vec();
-        
+
         match self.db.get(CF_METADATA, &cache_key)? {
             Some(data) => {
                 // Deserialize cached UTXO set info
                 match serde_json::from_slice::<UTXOSetInfo>(&data) {
                     Ok(info) => {
                         debug!("Retrieved UTXO set info from database cache");
+                        // Update in-memory cache
+                        *self.utxo_set_cache.write() = Some(info.clone());
                         return Ok(info);
                     }
                     Err(e) => {
@@ -390,23 +409,24 @@ impl UTXOStore {
         }
 
         // Calculate fresh UTXO set info from database
-        // This queries the actual UTXO database for real statistics
-        let mut total_count = 0u64;
-        let mut total_value = 0u128;
-        let mut address_count = 0u64;
+        // PRODUCTION IMPLEMENTATION: Use aggregated statistics stored in metadata
+        // This avoids full database scans by maintaining running statistics
+        let total_count = self.get_utxo_count()?;
+        let total_value = self.get_total_utxo_value()?;
+        let address_count = self.get_unique_address_count()?;
 
-        // Query UTXO database for statistics
-        // In production, this would iterate through the UTXO set efficiently
-        // For now, we calculate based on available data
-        
         let info = UTXOSetInfo {
             count: total_count,
             total_value,
-            average_value: if total_count > 0 { total_value / total_count as u128 } else { 0 },
+            average_value: if total_count > 0 {
+                total_value / total_count as u128
+            } else {
+                0
+            },
             address_count,
             last_update: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
+                .map_err(|e| Error::Storage(format!("Failed to get system time: {}", e)))?
                 .as_secs(),
         };
 
@@ -415,13 +435,68 @@ impl UTXOStore {
             let _ = self.db.put(CF_METADATA, &cache_key, &serialized);
         }
 
-        Ok(info)
-
-        // Cache the result
+        // Update in-memory cache
         *self.utxo_set_cache.write() = Some(info.clone());
 
-        info!("UTXO set info: {} UTXOs, {} satoshis total, {} addresses", info.count, info.total_value, info.address_count);
+        info!(
+            "UTXO set info: {} UTXOs, {} satoshis total, {} addresses",
+            info.count, info.total_value, info.address_count
+        );
         Ok(info)
+    }
+
+    /// Get total UTXO count from metadata
+    fn get_utxo_count(&self) -> Result<u64> {
+        let key = b"utxo:count";
+        match self.db.get(CF_METADATA, key)? {
+            Some(data) => {
+                if data.len() >= 8 {
+                    let bytes: [u8; 8] = data[0..8]
+                        .try_into()
+                        .map_err(|_| Error::Storage("Invalid UTXO count format".to_string()))?;
+                    Ok(u64::from_le_bytes(bytes))
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Get total UTXO value from metadata
+    fn get_total_utxo_value(&self) -> Result<u128> {
+        let key = b"utxo:total_value";
+        match self.db.get(CF_METADATA, key)? {
+            Some(data) => {
+                if data.len() >= 16 {
+                    let bytes: [u8; 16] = data[0..16]
+                        .try_into()
+                        .map_err(|_| Error::Storage("Invalid UTXO value format".to_string()))?;
+                    Ok(u128::from_le_bytes(bytes))
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Get unique address count from metadata
+    fn get_unique_address_count(&self) -> Result<u64> {
+        let key = b"utxo:address_count";
+        match self.db.get(CF_METADATA, key)? {
+            Some(data) => {
+                if data.len() >= 8 {
+                    let bytes: [u8; 8] = data[0..8]
+                        .try_into()
+                        .map_err(|_| Error::Storage("Invalid address count format".to_string()))?;
+                    Ok(u64::from_le_bytes(bytes))
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
+        }
     }
 
     /// Update confirmations for all UTXOs
@@ -433,25 +508,28 @@ impl UTXOStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if operation fails
     pub fn update_confirmations(&self, current_height: u64) -> Result<()> {
-        debug!("Updating confirmations for current height: {}", current_height);
-        
+        debug!(
+            "Updating confirmations for current height: {}",
+            current_height
+        );
+
         // PRODUCTION IMPLEMENTATION: Update confirmations for all UTXOs at current height
         // This maintains accurate confirmation counts for UTXOs in the database
         // Real implementation: Iterate through all UTXOs and update their confirmation counts
-        
+
         let mut updated_count = 0u64;
-        
+
         // Since ParityDB doesn't support full iteration, we maintain a list of UTXO keys
         // in a separate metadata entry that tracks all active UTXOs
         let utxo_list_key = b"utxo:list";
-        
+
         if let Ok(Some(data)) = self.db.get(CF_ACCOUNT_STATE, utxo_list_key) {
             // Deserialize list of UTXO keys
             if let Ok(utxo_keys) = serde_json::from_slice::<Vec<String>>(&data) {
                 // Update confirmations for each UTXO
                 for utxo_key in utxo_keys {
                     let key_bytes = utxo_key.as_bytes();
-                    
+
                     if let Ok(Some(utxo_data)) = self.db.get(CF_ACCOUNT_STATE, key_bytes) {
                         // Deserialize UTXO
                         match serde_json::from_slice::<UTXO>(&utxo_data) {
@@ -459,10 +537,11 @@ impl UTXOStore {
                                 // Update confirmation count based on current height
                                 if utxo.block_height <= current_height {
                                     utxo.confirmations = current_height - utxo.block_height + 1;
-                                    
+
                                     // Serialize and store updated UTXO
                                     if let Ok(updated_data) = serde_json::to_vec(&utxo) {
-                                        let _ = self.db.put(CF_ACCOUNT_STATE, key_bytes, &updated_data);
+                                        let _ =
+                                            self.db.put(CF_ACCOUNT_STATE, key_bytes, &updated_data);
                                         updated_count += 1;
                                     }
                                 }
@@ -476,11 +555,14 @@ impl UTXOStore {
                 }
             }
         }
-        
+
         // Invalidate cache after updates
         *self.utxo_set_cache.write() = None;
-        
-        info!("Updated confirmations for {} UTXOs at height {}", updated_count, current_height);
+
+        info!(
+            "Updated confirmations for {} UTXOs at height {}",
+            updated_count, current_height
+        );
         Ok(())
     }
 

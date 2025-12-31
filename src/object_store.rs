@@ -34,44 +34,44 @@ impl ObjectStore {
     /// Store an object using bincode 2.0 API
     pub fn store_object(&self, object: &Object) -> Result<()> {
         debug!("Storing object: {}", object.id);
-        
+
         let key = format!("obj:{}", object.id).into_bytes();
-        let value = serde_json::to_vec(object)
-            .map_err(crate::error::Error::Serialization)?;
-        
+        let value = serde_json::to_vec(object).map_err(crate::error::Error::Serialization)?;
+
         self.db.put("objects", &key, &value)?;
-        
+
         // Update the all_objects_index to include this object ID
         let all_objects_index_key = b"all_objects_index".to_vec();
-        
+
         let mut object_ids = Vec::new();
-        
+
         // Load existing index
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
             if let Ok(existing_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 object_ids = existing_ids;
             }
         }
-        
+
         // Add this object ID if not already present
         if !object_ids.contains(&object.id) {
             object_ids.push(object.id);
         }
-        
+
         // Store updated index
-        let index_value = serde_json::to_vec(&object_ids)
-            .map_err(crate::error::Error::Serialization)?;
-        self.db.put("objects", &all_objects_index_key, &index_value)?;
-        
+        let index_value =
+            serde_json::to_vec(&object_ids).map_err(crate::error::Error::Serialization)?;
+        self.db
+            .put("objects", &all_objects_index_key, &index_value)?;
+
         Ok(())
     }
 
     /// Get an object by ID using bincode 2.0 API
     pub fn get_object(&self, object_id: &ObjectID) -> Result<Option<Object>> {
         debug!("Retrieving object: {}", object_id);
-        
+
         let key = format!("obj:{}", object_id).into_bytes();
-        
+
         match self.db.get("objects", &key)? {
             Some(data) => {
                 let object = serde_json::from_slice::<Object>(&data)
@@ -85,25 +85,26 @@ impl ObjectStore {
     /// Delete an object using bincode 2.0 API
     pub fn delete_object(&self, object_id: &ObjectID) -> Result<()> {
         debug!("Deleting object: {}", object_id);
-        
+
         let key = format!("obj:{}", object_id).into_bytes();
         self.db.delete("objects", &key)?;
-        
+
         // Update the all_objects_index to remove this object ID
         let all_objects_index_key = b"all_objects_index".to_vec();
-        
+
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
             if let Ok(mut object_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 // Remove this object ID from the index
                 object_ids.retain(|id| id != object_id);
-                
+
                 // Store updated index
-                let index_value = serde_json::to_vec(&object_ids)
-                    .map_err(crate::error::Error::Serialization)?;
-                self.db.put("objects", &all_objects_index_key, &index_value)?;
+                let index_value =
+                    serde_json::to_vec(&object_ids).map_err(crate::error::Error::Serialization)?;
+                self.db
+                    .put("objects", &all_objects_index_key, &index_value)?;
             }
         }
-        
+
         Ok(())
     }
 
@@ -122,23 +123,26 @@ impl ObjectStore {
     }
 
     /// Get objects by owner using bincode 2.0 API
-    pub fn get_objects_by_owner(&self, owner: &silver_core::SilverAddress) -> Result<Vec<silver_core::Object>> {
+    pub fn get_objects_by_owner(
+        &self,
+        owner: &silver_core::SilverAddress,
+    ) -> Result<Vec<silver_core::Object>> {
         debug!("Retrieving objects for owner: {}", owner);
-        
+
         let mut objects = Vec::new();
-        
+
         // Create owner index key for efficient lookup
         // Format: "owner_index:<owner_address>"
         let owner_index_key = format!("owner_index:{}", owner);
-        
+
         // Query the owner_index column family for all objects owned by this address
         // The owner_index stores mappings from owner to object IDs
         match self.db.get("owner_index", owner_index_key.as_bytes()) {
             Ok(Some(value)) => {
                 // Deserialize the list of object IDs owned by this owner
-                let object_ids: Vec<silver_core::ObjectID> = serde_json::from_slice(&value)
-                    .map_err(crate::error::Error::Serialization)?;
-                
+                let object_ids: Vec<silver_core::ObjectID> =
+                    serde_json::from_slice(&value).map_err(crate::error::Error::Serialization)?;
+
                 // Retrieve each object from the main object store
                 for object_id in object_ids {
                     let obj_key = format!("obj:{}", object_id);
@@ -166,7 +170,7 @@ impl ObjectStore {
                 }
             }
         }
-        
+
         debug!("Retrieved {} objects for owner {}", objects.len(), owner);
         Ok(objects)
     }
@@ -174,20 +178,20 @@ impl ObjectStore {
     /// Iterate all objects using bincode 2.0 API
     pub fn iterate_all_objects(&self) -> Result<Vec<silver_core::Object>> {
         debug!("Iterating all objects");
-        
+
         let mut objects = Vec::new();
-        
+
         // Query the all_objects_index that tracks all object IDs
         // This index is maintained whenever objects are stored or deleted
         let all_objects_index_key = b"all_objects_index".to_vec();
-        
+
         if let Ok(Some(index_data)) = self.db.get("objects", &all_objects_index_key) {
             // Deserialize the list of all object IDs
             if let Ok(object_ids) = serde_json::from_slice::<Vec<ObjectID>>(&index_data) {
                 for object_id in object_ids {
                     // Retrieve each object from storage
                     let key = format!("obj:{}", object_id).into_bytes();
-                    
+
                     match self.db.get("objects", &key) {
                         Ok(Some(data)) => {
                             match serde_json::from_slice::<silver_core::Object>(&data) {
@@ -209,7 +213,7 @@ impl ObjectStore {
                 }
             }
         }
-        
+
         debug!("Iterated {} total objects", objects.len());
         Ok(objects)
     }
@@ -217,11 +221,11 @@ impl ObjectStore {
     /// Get object history using bincode 2.0 API
     pub fn get_object_history(&self, object_id: &ObjectID) -> Result<Vec<silver_core::Object>> {
         debug!("Retrieving history for object: {}", object_id);
-        
+
         let mut history = Vec::new();
         let object_id_str = object_id.to_string();
         let history_index_key = format!("history_index:{}", object_id_str).into_bytes();
-        
+
         // Query the history index for all versions of this object
         if let Ok(Some(index_data)) = self.db.get("object_history", &history_index_key) {
             if let Ok(versions) = serde_json::from_slice::<Vec<u64>>(&index_data) {
@@ -235,20 +239,27 @@ impl ObjectStore {
                 }
             }
         }
-        
+
         // Sort by version number (descending - newest first)
         history.sort_by(|a, b| b.version.cmp(&a.version));
-        
-        debug!("Retrieved {} versions for object {}", history.len(), object_id);
+
+        debug!(
+            "Retrieved {} versions for object {}",
+            history.len(),
+            object_id
+        );
         Ok(history)
     }
 
     /// Get sender's public key using bincode 2.0 API
-    pub fn get_sender_public_key(&self, sender: &silver_core::SilverAddress) -> Result<silver_core::PublicKey> {
+    pub fn get_sender_public_key(
+        &self,
+        sender: &silver_core::SilverAddress,
+    ) -> Result<silver_core::PublicKey> {
         debug!("Retrieving public key for sender: {}", sender);
-        
+
         let key = format!("pubkey:{}", sender).into_bytes();
-        
+
         match self.db.get("objects", &key)? {
             Some(data) => {
                 let pubkey = serde_json::from_slice::<silver_core::PublicKey>(&data)
@@ -258,9 +269,10 @@ impl ObjectStore {
             }
             None => {
                 // If public key not found, return error instead of default
-                Err(crate::error::Error::NotFound(
-                    format!("Public key not found for sender {}", sender)
-                ))
+                Err(crate::error::Error::NotFound(format!(
+                    "Public key not found for sender {}",
+                    sender
+                )))
             }
         }
     }

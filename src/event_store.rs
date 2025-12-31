@@ -119,14 +119,16 @@ impl EventStore {
     ) -> Result<EventID> {
         debug!("Storing event: {:?}", event_type);
 
-        let mut next_id = self.next_event_id.write()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to get next event ID: {}", e)))?;
-        
+        let mut next_id = self.next_event_id.write().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to get next event ID: {}", e))
+        })?;
+
         let event_id = EventID::new(*next_id);
         *next_id += 1;
 
-        let mut events = self.events.write()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e)))?;
+        let mut events = self.events.write().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e))
+        })?;
 
         let event_index = events.len() as u32;
 
@@ -149,8 +151,9 @@ impl EventStore {
     pub fn get_event(&self, event_id: EventID) -> Result<Option<Event>> {
         debug!("Retrieving event: {}", event_id);
 
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
         Ok(events.iter().find(|e| e.event_id == event_id).cloned())
     }
@@ -162,8 +165,9 @@ impl EventStore {
     ) -> Result<Vec<Event>> {
         debug!("Querying events for transaction: {}", transaction_digest);
 
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
         Ok(events
             .iter()
@@ -176,8 +180,9 @@ impl EventStore {
     pub fn get_events_by_object(&self, object_id: &ObjectID) -> Result<Vec<Event>> {
         debug!("Querying events for object: {}", object_id);
 
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
         Ok(events
             .iter()
@@ -190,8 +195,9 @@ impl EventStore {
     pub fn get_events_by_type(&self, event_type: &EventType) -> Result<Vec<Event>> {
         debug!("Querying events by type: {:?}", event_type);
 
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
         Ok(events
             .iter()
@@ -202,18 +208,21 @@ impl EventStore {
 
     /// Get the total number of stored events
     pub fn get_event_count(&self) -> Result<u64> {
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
         Ok(events.len() as u64)
     }
 
     /// Get the total size of event storage in bytes
     pub fn get_storage_size(&self) -> Result<u64> {
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
 
-        let size = events.iter()
+        let size = events
+            .iter()
             .map(|e| std::mem::size_of_val(e) + e.data.len())
             .sum::<usize>();
 
@@ -227,11 +236,13 @@ impl EventStore {
     ) -> Result<Vec<EventID>> {
         debug!("Batch storing {} events", events.len());
 
-        let mut next_id = self.next_event_id.write()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to get next event ID: {}", e)))?;
-        
-        let mut stored_events = self.events.write()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e)))?;
+        let mut next_id = self.next_event_id.write().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to get next event ID: {}", e))
+        })?;
+
+        let mut stored_events = self.events.write().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e))
+        })?;
 
         let mut event_ids = Vec::new();
         let mut event_index = stored_events.len() as u32;
@@ -261,8 +272,9 @@ impl EventStore {
     /// Get all events
     pub fn get_events(&self) -> Result<Vec<Event>> {
         debug!("Retrieving all events");
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
         Ok(events.clone())
     }
 }
@@ -286,22 +298,24 @@ impl EventStore {
     /// Get all events
     pub fn get_all_events(&self) -> Result<Vec<Event>> {
         debug!("Retrieving all events");
-        
-        let events = self.events.read()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e)))?;
-        
+
+        let events = self.events.read().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire read lock: {}", e))
+        })?;
+
         Ok(events.clone())
     }
 
     /// Delete an event by ID
     pub fn delete_event(&self, event_id: &EventID) -> Result<()> {
         debug!("Deleting event: {}", event_id);
-        
-        let mut events = self.events.write()
-            .map_err(|e| crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e)))?;
-        
+
+        let mut events = self.events.write().map_err(|e| {
+            crate::error::Error::InvalidData(format!("Failed to acquire write lock: {}", e))
+        })?;
+
         events.retain(|e| e.event_id != *event_id);
-        
+
         Ok(())
     }
 }

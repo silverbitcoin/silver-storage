@@ -61,28 +61,28 @@ impl SnapshotStore {
     /// Store a snapshot persistently using bincode 2.0 API
     pub fn store_snapshot(&self, snapshot: &Snapshot) -> Result<()> {
         debug!("Storing snapshot #{}", snapshot.sequence_number);
-        
+
         // Serialize snapshot using bincode 2.0 API
-        let snapshot_data = serde_json::to_vec(snapshot)
-            .map_err(crate::error::Error::Serialization)?;
-        
+        let snapshot_data =
+            serde_json::to_vec(snapshot).map_err(crate::error::Error::Serialization)?;
+
         // Store by sequence number as key
         let key = format!("snapshot:{}", snapshot.sequence_number).into_bytes();
         self.db.put(CF_SNAPSHOTS, &key, &snapshot_data)?;
-        
+
         // Also store latest snapshot pointer
         let latest_key = b"snapshot:latest".to_vec();
         self.db.put(CF_SNAPSHOTS, &latest_key, &snapshot_data)?;
-        
+
         Ok(())
     }
 
     /// Get snapshot by sequence number using bincode 2.0 API
     pub fn get_snapshot(&self, sequence_number: u64) -> Result<Option<Snapshot>> {
         debug!("Retrieving snapshot #{}", sequence_number);
-        
+
         let key = format!("snapshot:{}", sequence_number).into_bytes();
-        
+
         match self.db.get(CF_SNAPSHOTS, &key)? {
             Some(data) => {
                 let snapshot = serde_json::from_slice::<Snapshot>(&data)
@@ -96,9 +96,9 @@ impl SnapshotStore {
     /// Get latest snapshot using bincode 2.0 API
     pub fn get_latest_snapshot(&self) -> Result<Option<Snapshot>> {
         debug!("Retrieving latest snapshot");
-        
+
         let key = b"snapshot:latest".to_vec();
-        
+
         match self.db.get(CF_SNAPSHOTS, &key)? {
             Some(data) => {
                 let snapshot = serde_json::from_slice::<Snapshot>(&data)
@@ -118,22 +118,22 @@ impl SnapshotStore {
     /// Delete a snapshot
     pub fn delete_snapshot(&self, sequence_number: u64) -> Result<()> {
         debug!("Deleting snapshot #{}", sequence_number);
-        
+
         let key = format!("snapshot:{}", sequence_number).into_bytes();
         self.db.delete(CF_SNAPSHOTS, &key)?;
-        
+
         Ok(())
     }
 
     /// Verify snapshot chain integrity
     pub fn verify_chain_integrity(&self) -> Result<bool> {
         debug!("Verifying snapshot chain integrity");
-        
+
         // Get latest snapshot
         if let Some(latest) = self.get_latest_snapshot()? {
             // Verify chain by walking backwards
             let mut current_seq = latest.sequence_number;
-            
+
             while current_seq > 0 {
                 if let Some(snapshot) = self.get_snapshot(current_seq)? {
                     if current_seq > 0 {
@@ -150,7 +150,7 @@ impl SnapshotStore {
                     return Ok(false);
                 }
             }
-            
+
             Ok(true)
         } else {
             Ok(true) // Empty chain is valid
@@ -160,11 +160,11 @@ impl SnapshotStore {
     /// Prune old snapshots keeping only recent ones
     pub fn prune_old_snapshots(&self, keep_count: usize) -> Result<u64> {
         debug!("Pruning old snapshots, keeping {}", keep_count);
-        
+
         if let Some(latest) = self.get_latest_snapshot()? {
             let latest_seq = latest.sequence_number;
             let mut removed_count = 0u64;
-            
+
             // Delete snapshots older than keep_count
             if latest_seq > keep_count as u64 {
                 let cutoff = latest_seq - keep_count as u64;
@@ -175,7 +175,7 @@ impl SnapshotStore {
                     }
                 }
             }
-            
+
             Ok(removed_count)
         } else {
             Ok(0)

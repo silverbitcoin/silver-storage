@@ -100,27 +100,27 @@ impl BlockStore {
     /// Store a block persistently
     pub fn store_block(&self, block: &Block) -> Result<()> {
         debug!("Storing block #{} with hash {:?}", block.number, block.hash);
-        
+
         // Serialize block
         let block_data = serde_json::to_vec(block)?;
-        
+
         // Store by block number as key
         let key = format!("block:{}", block.number).into_bytes();
         self.db.put(CF_BLOCKS, &key, &block_data)?;
-        
+
         // Also store latest block pointer
         let latest_key = b"block:latest".to_vec();
         self.db.put(CF_BLOCKS, &latest_key, &block_data)?;
-        
+
         Ok(())
     }
 
     /// Get block by number
     pub fn get_block(&self, number: u64) -> Result<Option<Block>> {
         debug!("Retrieving block #{}", number);
-        
+
         let key = format!("block:{}", number).into_bytes();
-        
+
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
                 let block = serde_json::from_slice(&data)?;
@@ -133,9 +133,9 @@ impl BlockStore {
     /// Get latest block
     pub fn get_latest_block(&self) -> Result<Option<Block>> {
         debug!("Retrieving latest block");
-        
+
         let key = b"block:latest".to_vec();
-        
+
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
                 let block = serde_json::from_slice(&data)?;
@@ -148,39 +148,43 @@ impl BlockStore {
     /// Get blocks by hash
     pub fn get_blocks_by_hash(&self, hash: &str) -> Result<Vec<Block>> {
         debug!("Retrieving blocks by hash: {}", hash);
-        
+
         // Validate hash format (should be 128 hex characters for SHA512)
         if hash.len() != 128 {
             return Ok(Vec::new());
         }
-        
+
         // Convert hex string to bytes
         let hash_bytes = match hex::decode(hash) {
             Ok(bytes) => bytes,
             Err(_) => return Ok(Vec::new()),
         };
-        
+
         if hash_bytes.len() != 32 {
             return Ok(Vec::new());
         }
-        
+
         // Query by hash index in ParityDB
         let hash_index_key = format!("block_hash_index:{}", hash).into_bytes();
-        
+
         match self.db.get(CF_BLOCKS, &hash_index_key)? {
             Some(block_number_bytes) => {
                 // Decode block number from index
                 if block_number_bytes.len() != 8 {
                     return Ok(Vec::new());
                 }
-                
+
                 let block_number = u64::from_le_bytes([
-                    block_number_bytes[0], block_number_bytes[1],
-                    block_number_bytes[2], block_number_bytes[3],
-                    block_number_bytes[4], block_number_bytes[5],
-                    block_number_bytes[6], block_number_bytes[7],
+                    block_number_bytes[0],
+                    block_number_bytes[1],
+                    block_number_bytes[2],
+                    block_number_bytes[3],
+                    block_number_bytes[4],
+                    block_number_bytes[5],
+                    block_number_bytes[6],
+                    block_number_bytes[7],
                 ]);
-                
+
                 // Retrieve the actual block
                 match self.get_block(block_number)? {
                     Some(block) => Ok(vec![block]),
@@ -200,9 +204,9 @@ impl BlockStore {
     /// Get block by hash
     pub fn get_block_by_hash(&self, hash: &[u8; 64]) -> Result<Option<Block>> {
         debug!("Retrieving block by hash");
-        
+
         let key = format!("block:hash:{}", hex::encode(&hash[..])).into_bytes();
-        
+
         match self.db.get(CF_BLOCKS, &key)? {
             Some(data) => {
                 let block = serde_json::from_slice(&data)?;
@@ -215,7 +219,7 @@ impl BlockStore {
     /// Get latest block number
     pub fn get_latest_block_number(&self) -> Result<u64> {
         debug!("Retrieving latest block number");
-        
+
         if let Some(block) = self.get_latest_block()? {
             Ok(block.number)
         } else {

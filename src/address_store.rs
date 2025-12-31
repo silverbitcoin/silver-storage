@@ -10,10 +10,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Address information and metadata
@@ -119,15 +119,18 @@ impl AddressStore {
         debug!("Storing address info: {}", hex::encode(&info.address));
 
         // Serialize address info
-        let info_data = serde_json::to_vec(info)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let info_data =
+            serde_json::to_vec(info).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, info.storage_key().as_bytes(), &info_data)?;
+        self.db
+            .put(CF_ACCOUNT_STATE, info.storage_key().as_bytes(), &info_data)?;
 
         // Update cache
         let address_hex = hex::encode(&info.address);
-        self.address_cache.write().insert(address_hex.clone(), info.clone());
+        self.address_cache
+            .write()
+            .insert(address_hex.clone(), info.clone());
         self.balance_cache.write().insert(address_hex, info.balance);
 
         info!("Address info stored: {}", hex::encode(&info.address));
@@ -158,7 +161,7 @@ impl AddressStore {
             Some(data) => {
                 let info: AddressInfo = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
                 self.address_cache.write().insert(address_hex, info.clone());
                 Ok(Some(info))
@@ -211,13 +214,19 @@ impl AddressStore {
 
             // Update total_received or total_sent based on balance change
             if new_balance > old_balance {
-                info.total_received = info.total_received.saturating_add(new_balance - old_balance);
+                info.total_received = info
+                    .total_received
+                    .saturating_add(new_balance - old_balance);
             } else {
                 info.total_sent = info.total_sent.saturating_add(old_balance - new_balance);
             }
 
             self.store_address_info(&info)?;
-            info!("Balance updated for address: {} -> {}", hex::encode(address), new_balance);
+            info!(
+                "Balance updated for address: {} -> {}",
+                hex::encode(address),
+                new_balance
+            );
             Ok(())
         } else {
             // Create new address info
@@ -262,7 +271,8 @@ impl AddressStore {
             tx_list.push(txid.to_string());
             let list_data = serde_json::to_vec(&tx_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, tx_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, tx_index_key.as_bytes(), &list_data)?;
         }
 
         info!("Transaction added to address: {}", hex::encode(address));
@@ -294,12 +304,9 @@ impl AddressStore {
         // PRODUCTION IMPLEMENTATION: Return all addresses from cache and database
         // ParityDB doesn't support full iteration, so we use the cache which is
         // populated during initialization and updated on each address operation
-        
-        let mut addresses: Vec<AddressInfo> = self.address_cache.read()
-            .values()
-            .cloned()
-            .collect();
-        
+
+        let mut addresses: Vec<AddressInfo> = self.address_cache.read().values().cloned().collect();
+
         // Sort by address for consistent ordering
         addresses.sort_by(|a, b| a.address.cmp(&b.address));
 
@@ -317,7 +324,11 @@ impl AddressStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if operation fails
     pub fn set_label(&self, address: &[u8], label: &str) -> Result<()> {
-        debug!("Setting label for address: {} -> {}", hex::encode(address), label);
+        debug!(
+            "Setting label for address: {} -> {}",
+            hex::encode(address),
+            label
+        );
 
         if let Some(mut info) = self.get_address_info(address)? {
             // Remove from old label index if exists
@@ -328,7 +339,8 @@ impl AddressStore {
                 if !addresses.is_empty() {
                     let list_data = serde_json::to_vec(&addresses)
                         .map_err(|e| Error::SerializationError(e.to_string()))?;
-                    self.db.put(CF_ACCOUNT_STATE, old_label_key.as_bytes(), &list_data)?;
+                    self.db
+                        .put(CF_ACCOUNT_STATE, old_label_key.as_bytes(), &list_data)?;
                 } else {
                     self.db.delete(CF_ACCOUNT_STATE, old_label_key.as_bytes())?;
                 }
@@ -345,13 +357,17 @@ impl AddressStore {
                 addresses.push(address.to_vec());
                 let list_data = serde_json::to_vec(&addresses)
                     .map_err(|e| Error::SerializationError(e.to_string()))?;
-                self.db.put(CF_ACCOUNT_STATE, label_key.as_bytes(), &list_data)?;
+                self.db
+                    .put(CF_ACCOUNT_STATE, label_key.as_bytes(), &list_data)?;
             }
 
             info!("Label set for address: {}", hex::encode(address));
             Ok(())
         } else {
-            Err(Error::NotFound(format!("Address not found: {}", hex::encode(address))))
+            Err(Error::NotFound(format!(
+                "Address not found: {}",
+                hex::encode(address)
+            )))
         }
     }
 

@@ -11,11 +11,11 @@
 
 use crate::error::{Error, Result};
 use parity_db::{Db, Options};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use tracing::{info, debug, warn, error};
 use parking_lot::RwLock;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 /// Column family names for blockchain data
 pub const CF_OBJECTS: &str = "objects";
@@ -64,7 +64,7 @@ const COLUMN_FAMILIES: &[&str] = &[
 /// ParityDB-based database wrapper for production blockchain storage
 ///
 /// This is a real, production-ready implementation using ParityDB,
-/// 
+///
 /// Features:
 /// - ACID transactions with atomic commits
 /// - Compression support (LZ4)
@@ -139,8 +139,9 @@ impl ParityDatabase {
 
         // Ensure directory exists with proper permissions
         if !path.exists() {
-            std::fs::create_dir_all(&path)
-                .map_err(|e| Error::Storage(format!("Failed to create database directory: {}", e)))?;
+            std::fs::create_dir_all(&path).map_err(|e| {
+                Error::Storage(format!("Failed to create database directory: {}", e))
+            })?;
         }
 
         // Verify directory is writable
@@ -161,8 +162,9 @@ impl ParityDatabase {
                 // Attempt recovery by removing corrupted files
                 warn!("Attempting database recovery...");
                 Self::attempt_recovery(&path)?;
-                Db::open_or_create(&options)
-                    .map_err(|e| Error::Storage(format!("Failed to open ParityDB after recovery: {}", e)))?
+                Db::open_or_create(&options).map_err(|e| {
+                    Error::Storage(format!("Failed to open ParityDB after recovery: {}", e))
+                })?
             }
         };
 
@@ -185,21 +187,23 @@ impl ParityDatabase {
     /// Attempt to recover from database corruption
     fn attempt_recovery(path: &Path) -> Result<()> {
         warn!("Attempting to recover database at {:?}", path);
-        
+
         // Backup corrupted database
-        let backup_path = path.parent()
+        let backup_path = path
+            .parent()
             .ok_or_else(|| Error::Storage("Invalid database path".to_string()))?
             .join(format!("backup_{}", chrono::Local::now().timestamp()));
-        
+
         std::fs::rename(path, &backup_path)
             .map_err(|e| Error::Storage(format!("Failed to backup corrupted database: {}", e)))?;
-        
+
         info!("Corrupted database backed up to {:?}", backup_path);
-        
+
         // Create fresh database directory
-        std::fs::create_dir_all(path)
-            .map_err(|e| Error::Storage(format!("Failed to create new database directory: {}", e)))?;
-        
+        std::fs::create_dir_all(path).map_err(|e| {
+            Error::Storage(format!("Failed to create new database directory: {}", e))
+        })?;
+
         Ok(())
     }
 
@@ -213,10 +217,16 @@ impl ParityDatabase {
     /// Option containing the value if found
     pub fn get(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let cf_index = self.get_column_index(cf_name)?;
-        
-        debug!("Reading from column {} with key length {}", cf_name, key.len());
-        
-        let result = self.db.get(cf_index, key)
+
+        debug!(
+            "Reading from column {} with key length {}",
+            cf_name,
+            key.len()
+        );
+
+        let result = self
+            .db
+            .get(cf_index, key)
             .map_err(|e| Error::Storage(format!("Failed to read from ParityDB: {}", e)))?;
 
         // Update statistics
@@ -236,14 +246,19 @@ impl ParityDatabase {
     /// * `value` - Value to store
     pub fn put(&self, cf_name: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let cf_index = self.get_column_index(cf_name)?;
-        
-        debug!("Writing to column {} with key length {} and value length {}", 
-               cf_name, key.len(), value.len());
-        
+
+        debug!(
+            "Writing to column {} with key length {} and value length {}",
+            cf_name,
+            key.len(),
+            value.len()
+        );
+
         // ParityDB uses transactions for atomic writes
         let tx = vec![(cf_index, key.to_vec(), Some(value.to_vec()))];
-        
-        self.db.commit(tx)
+
+        self.db
+            .commit(tx)
             .map_err(|e| Error::Storage(format!("Failed to write to ParityDB: {}", e)))?;
 
         // Update statistics
@@ -263,13 +278,18 @@ impl ParityDatabase {
     /// * `key` - Key to delete
     pub fn delete(&self, cf_name: &str, key: &[u8]) -> Result<()> {
         let cf_index = self.get_column_index(cf_name)?;
-        
-        debug!("Deleting from column {} with key length {}", cf_name, key.len());
-        
+
+        debug!(
+            "Deleting from column {} with key length {}",
+            cf_name,
+            key.len()
+        );
+
         // ParityDB uses transactions for atomic deletes
         let tx = vec![(cf_index, key.to_vec(), None)];
-        
-        self.db.commit(tx)
+
+        self.db
+            .commit(tx)
             .map_err(|e| Error::Storage(format!("Failed to delete from ParityDB: {}", e)))?;
 
         // Update statistics
@@ -288,15 +308,16 @@ impl ParityDatabase {
     /// * `items` - Vector of (key, value) tuples
     pub fn batch_write(&self, cf_name: &str, items: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
         let cf_index = self.get_column_index(cf_name)?;
-        
+
         debug!("Batch writing {} items to column {}", items.len(), cf_name);
-        
+
         let tx: Vec<_> = items
             .iter()
             .map(|(k, v)| (cf_index, k.clone(), Some(v.clone())))
             .collect();
-        
-        self.db.commit(tx)
+
+        self.db
+            .commit(tx)
             .map_err(|e| Error::Storage(format!("Failed to batch write to ParityDB: {}", e)))?;
 
         // Update statistics
@@ -316,15 +337,17 @@ impl ParityDatabase {
     /// * `keys` - Vector of keys to delete
     pub fn batch_delete(&self, cf_name: &str, keys: &[Vec<u8>]) -> Result<()> {
         let cf_index = self.get_column_index(cf_name)?;
-        
-        debug!("Batch deleting {} items from column {}", keys.len(), cf_name);
-        
-        let tx: Vec<_> = keys
-            .iter()
-            .map(|k| (cf_index, k.clone(), None))
-            .collect();
-        
-        self.db.commit(tx)
+
+        debug!(
+            "Batch deleting {} items from column {}",
+            keys.len(),
+            cf_name
+        );
+
+        let tx: Vec<_> = keys.iter().map(|k| (cf_index, k.clone(), None)).collect();
+
+        self.db
+            .commit(tx)
             .map_err(|e| Error::Storage(format!("Failed to batch delete from ParityDB: {}", e)))?;
 
         // Update statistics
@@ -382,21 +405,21 @@ impl ParityDatabase {
     /// Verify read/write access to database
     pub fn verify_read_write_access(&self) -> Result<bool> {
         debug!("Verifying read/write access");
-        
+
         // Test write
         let test_key = b"__test_key__".to_vec();
         let test_value = b"__test_value__".to_vec();
         self.put(CF_OBJECTS, &test_key, &test_value)?;
-        
+
         // Test read
         let result = self.get(CF_OBJECTS, &test_key)?;
         if result.is_none() {
             return Err(Error::Storage("Read/write verification failed".to_string()));
         }
-        
+
         // Clean up
         self.delete(CF_OBJECTS, &test_key)?;
-        
+
         Ok(true)
     }
 
@@ -418,10 +441,10 @@ impl ParityDatabase {
         let key = b"metadata:snapshot_count".to_vec();
         match self.get(CF_METADATA, &key)? {
             Some(data) => {
-                let count = u64::from_le_bytes(
-                    data.try_into()
-                        .map_err(|_| Error::Storage("Invalid snapshot count format".to_string()))?
-                );
+                let count =
+                    u64::from_le_bytes(data.try_into().map_err(|_| {
+                        Error::Storage("Invalid snapshot count format".to_string())
+                    })?);
                 Ok(count)
             }
             None => Ok(0),
@@ -460,10 +483,10 @@ impl ParityDatabase {
         let key = b"metadata:validator_count".to_vec();
         match self.get(CF_METADATA, &key)? {
             Some(data) => {
-                let count = u64::from_le_bytes(
-                    data.try_into()
-                        .map_err(|_| Error::Storage("Invalid validator count format".to_string()))?
-                );
+                let count =
+                    u64::from_le_bytes(data.try_into().map_err(|_| {
+                        Error::Storage("Invalid validator count format".to_string())
+                    })?);
                 Ok(count)
             }
             None => Ok(0),
@@ -501,10 +524,10 @@ impl ParityDatabase {
         let key = b"metadata:transaction_count".to_vec();
         match self.get(CF_METADATA, &key)? {
             Some(data) => {
-                let count = u64::from_le_bytes(
-                    data.try_into()
-                        .map_err(|_| Error::Storage("Invalid transaction count format".to_string()))?
-                );
+                let count =
+                    u64::from_le_bytes(data.try_into().map_err(|_| {
+                        Error::Storage("Invalid transaction count format".to_string())
+                    })?);
                 Ok(count)
             }
             None => Ok(0),
@@ -540,14 +563,14 @@ impl ParityDatabase {
     /// Check for corruption markers
     pub fn check_corruption_markers(&self) -> Result<bool> {
         debug!("Checking for corruption markers");
-        
+
         // Check for known corruption patterns
         let corruption_key = b"__corruption_marker__".to_vec();
         if self.get(CF_METADATA, &corruption_key)?.is_some() {
             warn!("Corruption marker detected!");
             return Ok(false);
         }
-        
+
         Ok(true)
     }
 
@@ -562,32 +585,32 @@ impl ParityDatabase {
     /// Verify key-value consistency
     pub fn verify_key_value_consistency(&self) -> Result<bool> {
         debug!("Verifying key-value consistency");
-        
+
         // Perform test write/read cycle
         let test_key = b"__consistency_test__".to_vec();
         let test_value = b"consistency_check".to_vec();
-        
+
         self.put(CF_METADATA, &test_key, &test_value)?;
-        
+
         let retrieved = self.get(CF_METADATA, &test_key)?;
         if retrieved.as_ref() != Some(&test_value) {
             error!("Consistency check failed!");
             return Ok(false);
         }
-        
+
         self.delete(CF_METADATA, &test_key)?;
-        
+
         Ok(true)
     }
 
     /// Get database health status
     pub fn get_health_status(&self) -> Result<DatabaseHealth> {
         debug!("Checking database health");
-        
+
         let is_corrupted = !self.check_corruption_markers()?;
         let is_consistent = self.verify_key_value_consistency()?;
         let stats = self.get_stats()?;
-        
+
         Ok(DatabaseHealth {
             is_healthy: !is_corrupted && is_consistent,
             is_corrupted,

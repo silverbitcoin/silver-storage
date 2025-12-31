@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Wallet information and metadata
@@ -194,14 +194,17 @@ impl WalletStore {
         debug!("Storing wallet info: {}", info.wallet_name);
 
         // Serialize wallet info
-        let info_data = serde_json::to_vec(info)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let info_data =
+            serde_json::to_vec(info).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, info.storage_key().as_bytes(), &info_data)?;
+        self.db
+            .put(CF_ACCOUNT_STATE, info.storage_key().as_bytes(), &info_data)?;
 
         // Update cache
-        self.wallet_cache.write().insert(info.wallet_name.clone(), info.clone());
+        self.wallet_cache
+            .write()
+            .insert(info.wallet_name.clone(), info.clone());
 
         // Add to wallet index
         let wallet_index_key = "wallet:index:all";
@@ -210,7 +213,8 @@ impl WalletStore {
             wallet_list.push(info.wallet_name.clone());
             let list_data = serde_json::to_vec(&wallet_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, wallet_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, wallet_index_key.as_bytes(), &list_data)?;
         }
 
         info!("Wallet info stored: {}", info.wallet_name);
@@ -240,9 +244,11 @@ impl WalletStore {
             Some(data) => {
                 let info: WalletInfo = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
-                self.wallet_cache.write().insert(wallet_name.to_string(), info.clone());
+                self.wallet_cache
+                    .write()
+                    .insert(wallet_name.to_string(), info.clone());
                 Ok(Some(info))
             }
             None => Ok(None),
@@ -279,23 +285,35 @@ impl WalletStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if creation fails
     pub fn create_account(&self, account: &AccountInfo) -> Result<()> {
-        debug!("Creating account: {} in wallet: {}", account.account_name, account.wallet_name);
+        debug!(
+            "Creating account: {} in wallet: {}",
+            account.account_name, account.wallet_name
+        );
 
         // Check if wallet exists
         if self.get_wallet_info(&account.wallet_name)?.is_none() {
-            return Err(Error::NotFound(format!("Wallet not found: {}", account.wallet_name)));
+            return Err(Error::NotFound(format!(
+                "Wallet not found: {}",
+                account.wallet_name
+            )));
         }
 
         // Serialize account info
-        let account_data = serde_json::to_vec(account)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let account_data =
+            serde_json::to_vec(account).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, account.storage_key().as_bytes(), &account_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            account.storage_key().as_bytes(),
+            &account_data,
+        )?;
 
         // Update cache
         let cache_key = format!("{}:{}", account.wallet_name, account.account_name);
-        self.account_cache.write().insert(cache_key, account.clone());
+        self.account_cache
+            .write()
+            .insert(cache_key, account.clone());
 
         // Add to account index
         let account_index_key = format!("wallet:account_index:{}", account.wallet_name);
@@ -304,10 +322,14 @@ impl WalletStore {
             account_list.push(account.account_name.clone());
             let list_data = serde_json::to_vec(&account_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, account_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, account_index_key.as_bytes(), &list_data)?;
         }
 
-        info!("Account created: {} in wallet: {}", account.account_name, account.wallet_name);
+        info!(
+            "Account created: {} in wallet: {}",
+            account.account_name, account.wallet_name
+        );
         Ok(())
     }
 
@@ -321,8 +343,15 @@ impl WalletStore {
     /// * `Ok(Some(AccountInfo))` if found
     /// * `Ok(None)` if not found
     /// * `Err(Error)` if retrieval fails
-    pub fn get_account(&self, wallet_name: &str, account_name: &str) -> Result<Option<AccountInfo>> {
-        debug!("Retrieving account: {} from wallet: {}", account_name, wallet_name);
+    pub fn get_account(
+        &self,
+        wallet_name: &str,
+        account_name: &str,
+    ) -> Result<Option<AccountInfo>> {
+        debug!(
+            "Retrieving account: {} from wallet: {}",
+            account_name, wallet_name
+        );
 
         let cache_key = format!("{}:{}", wallet_name, account_name);
 
@@ -337,7 +366,7 @@ impl WalletStore {
             Some(data) => {
                 let info: AccountInfo = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
                 self.account_cache.write().insert(cache_key, info.clone());
                 Ok(Some(info))
@@ -380,7 +409,10 @@ impl WalletStore {
     /// * `Ok(u128)` - Balance in satoshis
     /// * `Err(Error)` if operation fails
     pub fn get_account_balance(&self, wallet_name: &str, account_name: &str) -> Result<u128> {
-        debug!("Getting balance for account: {} in wallet: {}", account_name, wallet_name);
+        debug!(
+            "Getting balance for account: {} in wallet: {}",
+            account_name, wallet_name
+        );
 
         if let Some(account) = self.get_account(wallet_name, account_name)? {
             Ok(account.balance)
@@ -399,25 +431,43 @@ impl WalletStore {
     /// # Returns
     /// * `Ok(())` on success
     /// * `Err(Error)` if operation fails
-    pub fn update_account_balance(&self, wallet_name: &str, account_name: &str, new_balance: u128) -> Result<()> {
-        debug!("Updating balance for account: {} in wallet: {}", account_name, wallet_name);
+    pub fn update_account_balance(
+        &self,
+        wallet_name: &str,
+        account_name: &str,
+        new_balance: u128,
+    ) -> Result<()> {
+        debug!(
+            "Updating balance for account: {} in wallet: {}",
+            account_name, wallet_name
+        );
 
         if let Some(mut account) = self.get_account(wallet_name, account_name)? {
             account.balance = new_balance;
-            
+
             // Serialize and store
             let account_data = serde_json::to_vec(&account)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, account.storage_key().as_bytes(), &account_data)?;
+            self.db.put(
+                CF_ACCOUNT_STATE,
+                account.storage_key().as_bytes(),
+                &account_data,
+            )?;
 
             // Update cache
             let cache_key = format!("{}:{}", wallet_name, account_name);
             self.account_cache.write().insert(cache_key, account);
 
-            info!("Account balance updated: {} in wallet: {}", account_name, wallet_name);
+            info!(
+                "Account balance updated: {} in wallet: {}",
+                account_name, wallet_name
+            );
             Ok(())
         } else {
-            Err(Error::NotFound(format!("Account not found: {}", account_name)))
+            Err(Error::NotFound(format!(
+                "Account not found: {}",
+                account_name
+            )))
         }
     }
 
@@ -430,14 +480,21 @@ impl WalletStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if storage fails
     pub fn store_key(&self, key_info: &KeyInfo) -> Result<()> {
-        debug!("Storing encrypted key for address: {}", hex::encode(&key_info.address));
+        debug!(
+            "Storing encrypted key for address: {}",
+            hex::encode(&key_info.address)
+        );
 
         // Serialize key info
-        let key_data = serde_json::to_vec(key_info)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let key_data =
+            serde_json::to_vec(key_info).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, key_info.storage_key().as_bytes(), &key_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            key_info.storage_key().as_bytes(),
+            &key_data,
+        )?;
 
         // Add to key index
         let key_index_key = "wallet:key_index:all";
@@ -447,7 +504,8 @@ impl WalletStore {
             key_list.push(address_hex);
             let list_data = serde_json::to_vec(&key_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, key_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, key_index_key.as_bytes(), &list_data)?;
         }
 
         info!("Key stored for address: {}", hex::encode(&key_info.address));
@@ -517,7 +575,10 @@ impl WalletStore {
             self.store_wallet_info(&info)?;
             Ok(())
         } else {
-            Err(Error::NotFound(format!("Wallet not found: {}", wallet_name)))
+            Err(Error::NotFound(format!(
+                "Wallet not found: {}",
+                wallet_name
+            )))
         }
     }
 
@@ -541,7 +602,10 @@ impl WalletStore {
             self.store_wallet_info(&info)?;
             Ok(())
         } else {
-            Err(Error::NotFound(format!("Wallet not found: {}", wallet_name)))
+            Err(Error::NotFound(format!(
+                "Wallet not found: {}",
+                wallet_name
+            )))
         }
     }
 
@@ -561,7 +625,10 @@ impl WalletStore {
     // Helper method to get account list for a wallet
     fn get_account_list(&self, wallet_name: &str) -> Result<Vec<String>> {
         let account_index_key = format!("wallet:account_index:{}", wallet_name);
-        match self.db.get(CF_ACCOUNT_STATE, account_index_key.as_bytes())? {
+        match self
+            .db
+            .get(CF_ACCOUNT_STATE, account_index_key.as_bytes())?
+        {
             Some(data) => {
                 let list: Vec<String> = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;

@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Fee estimate for a specific block target
@@ -92,6 +92,12 @@ impl FeeHistoryPoint {
     }
 }
 
+impl Default for FeeHistoryPoint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fee statistics
 ///
 /// Aggregated statistics about current fee rates in the mempool.
@@ -134,6 +140,12 @@ impl FeeStats {
     }
 }
 
+impl Default for FeeStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fee Store with ParityDB backend
 ///
 /// Provides persistent storage for fee information with:
@@ -173,22 +185,34 @@ impl FeeStore {
     /// * `Ok(())` on success
     /// * `Err(Error)` if storage fails
     pub fn store_fee_estimate(&self, estimate: &FeeEstimate) -> Result<()> {
-        debug!("Storing fee estimate: {} blocks -> {} sat/byte", estimate.blocks, estimate.fee_rate);
+        debug!(
+            "Storing fee estimate: {} blocks -> {} sat/byte",
+            estimate.blocks, estimate.fee_rate
+        );
 
         // Serialize estimate
-        let estimate_data = serde_json::to_vec(estimate)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let estimate_data =
+            serde_json::to_vec(estimate).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, estimate.storage_key().as_bytes(), &estimate_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            estimate.storage_key().as_bytes(),
+            &estimate_data,
+        )?;
 
         // Update cache
-        self.estimate_cache.write().insert(estimate.blocks, estimate.clone());
+        self.estimate_cache
+            .write()
+            .insert(estimate.blocks, estimate.clone());
 
         // Invalidate stats cache
         *self.stats_cache.write() = None;
 
-        info!("Fee estimate stored: {} blocks -> {} sat/byte", estimate.blocks, estimate.fee_rate);
+        info!(
+            "Fee estimate stored: {} blocks -> {} sat/byte",
+            estimate.blocks, estimate.fee_rate
+        );
         Ok(())
     }
 
@@ -215,7 +239,7 @@ impl FeeStore {
             Some(data) => {
                 let estimate: FeeEstimate = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
                 self.estimate_cache.write().insert(blocks, estimate.clone());
                 Ok(Some(estimate))
@@ -244,7 +268,7 @@ impl FeeStore {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            
+
             if now - estimate.timestamp < 3600 {
                 return Ok(estimate.fee_rate);
             }
@@ -260,9 +284,11 @@ impl FeeStore {
         // Calculate median fee rate
         let mut sorted_samples = samples.clone();
         sorted_samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        
-        let median = if sorted_samples.len() % 2 == 0 {
-            (sorted_samples[sorted_samples.len() / 2 - 1] + sorted_samples[sorted_samples.len() / 2]) / 2.0
+
+        let median = if sorted_samples.len().is_multiple_of(2) {
+            (sorted_samples[sorted_samples.len() / 2 - 1]
+                + sorted_samples[sorted_samples.len() / 2])
+                / 2.0
         } else {
             sorted_samples[sorted_samples.len() / 2]
         };
@@ -294,24 +320,24 @@ impl FeeStore {
 
         // PRODUCTION IMPLEMENTATION: Sophisticated fee estimation using multiple data sources
         // Analyzes historical transaction data, mempool congestion, and network conditions
-        
+
         // Get current mempool state
         let _mempool_size = self.get_mempool_size()?;
         let mempool_bytes = self.get_mempool_bytes()?;
-        
+
         // Calculate current mempool congestion level (0.0 to 1.0)
         let max_mempool_bytes = 300_000_000u64; // 300MB default
         let congestion_level = (mempool_bytes as f64) / (max_mempool_bytes as f64);
-        
+
         // Get historical fee rates for similar block targets
         let _historical_rate = self.get_historical_fee_rate(blocks)?;
-        
+
         // Get current network conditions
         let network_fee = self.estimate_fee(blocks)?;
-        
+
         // Calculate smart fee based on multiple factors
         let mut smart_fee = network_fee;
-        
+
         // Adjust for mempool congestion
         if congestion_level > 0.8 {
             // High congestion: increase fee by 50%
@@ -323,47 +349,52 @@ impl FeeStore {
             // Low congestion: decrease fee by 20%
             smart_fee *= 0.8;
         }
-        
+
         // Adjust based on block target
         // Faster blocks need higher fees
         let block_adjustment = match blocks {
-            1..=2 => 1.5,      // Next block: 50% premium
-            3..=6 => 1.25,     // Within 6 blocks: 25% premium
-            7..=12 => 1.0,     // Within 12 blocks: normal
-            13..=24 => 0.9,    // Within 24 blocks: 10% discount
-            _ => 0.75,         // Slow: 25% discount
+            1..=2 => 1.5,   // Next block: 50% premium
+            3..=6 => 1.25,  // Within 6 blocks: 25% premium
+            7..=12 => 1.0,  // Within 12 blocks: normal
+            13..=24 => 0.9, // Within 24 blocks: 10% discount
+            _ => 0.75,      // Slow: 25% discount
         };
-        
+
         smart_fee *= block_adjustment;
-        
+
         // Ensure minimum fee
         let min_fee = 0.00001;
         if smart_fee < min_fee {
             smart_fee = min_fee;
         }
-        
+
         // Ensure maximum reasonable fee
         let max_fee = 1.0;
         if smart_fee > max_fee {
             smart_fee = max_fee;
         }
-        
-        info!("Smart fee estimation: {} sat/byte for {} blocks (congestion: {:.2}%)", 
-              smart_fee, blocks, congestion_level * 100.0);
-        
+
+        info!(
+            "Smart fee estimation: {} sat/byte for {} blocks (congestion: {:.2}%)",
+            smart_fee,
+            blocks,
+            congestion_level * 100.0
+        );
+
         Ok(smart_fee)
     }
-    
+
     /// Get historical fee rate for block target
     fn get_historical_fee_rate(&self, blocks: u32) -> Result<f64> {
         // Query historical fee data from database
         let key = format!("fee_rate:blocks_{}", blocks).into_bytes();
-        
-        match self.db.get(CF_METADATA, &key)? {
+
+        match self.db.get(CF_ACCOUNT_STATE, &key)? {
             Some(data) => {
                 // Deserialize stored fee rate
                 if data.len() >= 8 {
-                    let bytes: [u8; 8] = data[0..8].try_into()
+                    let bytes: [u8; 8] = data[0..8]
+                        .try_into()
                         .map_err(|_| Error::Storage("Invalid fee rate format".to_string()))?;
                     Ok(f64::from_le_bytes(bytes))
                 } else {
@@ -377,29 +408,29 @@ impl FeeStore {
             }
         }
     }
-    
+
     /// Calculate default fee rate based on block target
     fn calculate_default_fee_rate(&self, blocks: u32) -> Result<f64> {
         // Real implementation: calculate based on network conditions
         let base_rate = 0.00001;
         let rate = match blocks {
-            1..=2 => base_rate * 10.0,      // Fast confirmation: 10x base
-            3..=6 => base_rate * 5.0,       // Standard: 5x base
-            7..=12 => base_rate * 2.0,      // Slow: 2x base
-            _ => base_rate,                 // Very slow: base rate
+            1..=2 => base_rate * 10.0, // Fast confirmation: 10x base
+            3..=6 => base_rate * 5.0,  // Standard: 5x base
+            7..=12 => base_rate * 2.0, // Slow: 2x base
+            _ => base_rate,            // Very slow: base rate
         };
         Ok(rate)
     }
-    
+
     /// Get current mempool size in transaction count
     fn get_mempool_size(&self) -> Result<u64> {
         // Query mempool size from database
-        let key = b"mempool:size".to_vec();
-        
-        match self.db.get(CF_METADATA, &key)? {
+        let size_key = b"mempool:size";
+        match self.db.get(CF_ACCOUNT_STATE, size_key)? {
             Some(data) => {
                 if data.len() >= 8 {
-                    let bytes: [u8; 8] = data[0..8].try_into()
+                    let bytes: [u8; 8] = data[0..8]
+                        .try_into()
                         .map_err(|_| Error::Storage("Invalid mempool size format".to_string()))?;
                     Ok(u64::from_le_bytes(bytes))
                 } else {
@@ -408,27 +439,17 @@ impl FeeStore {
             }
             None => Ok(0),
         }
-        let size_key = b"mempool:size";
-        match self.db.get(CF_ACCOUNT_STATE, size_key)? {
-            Some(data) => {
-                let size = u64::from_le_bytes(
-                    data.try_into().map_err(|_| Error::DeserializationError("Invalid size format".to_string()))?
-                );
-                Ok(size)
-            }
-            None => Ok(0),
-        }
     }
-    
+
     /// Get current mempool size in bytes
     fn get_mempool_bytes(&self) -> Result<u64> {
         // Query mempool bytes from database
         let bytes_key = b"mempool:bytes";
         match self.db.get(CF_ACCOUNT_STATE, bytes_key)? {
             Some(data) => {
-                let bytes = u64::from_le_bytes(
-                    data.try_into().map_err(|_| Error::DeserializationError("Invalid bytes format".to_string()))?
-                );
+                let bytes = u64::from_le_bytes(data.try_into().map_err(|_| {
+                    Error::DeserializationError("Invalid bytes format".to_string())
+                })?);
                 Ok(bytes)
             }
             None => Ok(0),
@@ -450,7 +471,7 @@ impl FeeStore {
 
         // Calculate from fee samples
         let samples = self.fee_samples.read();
-        
+
         if samples.is_empty() {
             let stats = FeeStats::new();
             *self.stats_cache.write() = Some(stats.clone());
@@ -463,9 +484,11 @@ impl FeeStore {
         let min_fee_rate = sorted_samples[0];
         let max_fee_rate = sorted_samples[sorted_samples.len() - 1];
         let avg_fee_rate: f64 = sorted_samples.iter().sum::<f64>() / sorted_samples.len() as f64;
-        
-        let median_fee_rate = if sorted_samples.len() % 2 == 0 {
-            (sorted_samples[sorted_samples.len() / 2 - 1] + sorted_samples[sorted_samples.len() / 2]) / 2.0
+
+        let median_fee_rate = if sorted_samples.len().is_multiple_of(2) {
+            (sorted_samples[sorted_samples.len() / 2 - 1]
+                + sorted_samples[sorted_samples.len() / 2])
+                / 2.0
         } else {
             sorted_samples[sorted_samples.len() / 2]
         };
@@ -490,7 +513,10 @@ impl FeeStore {
         // Cache the result
         *self.stats_cache.write() = Some(stats.clone());
 
-        info!("Fee stats: min={}, max={}, median={}", min_fee_rate, max_fee_rate, median_fee_rate);
+        info!(
+            "Fee stats: min={}, max={}, median={}",
+            min_fee_rate, max_fee_rate, median_fee_rate
+        );
         Ok(stats)
     }
 
@@ -533,11 +559,15 @@ impl FeeStore {
         debug!("Storing fee history point: {} transactions", point.tx_count);
 
         // Serialize history point
-        let point_data = serde_json::to_vec(point)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let point_data =
+            serde_json::to_vec(point).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, point.storage_key().as_bytes(), &point_data)?;
+        self.db.put(
+            CF_ACCOUNT_STATE,
+            point.storage_key().as_bytes(),
+            &point_data,
+        )?;
 
         // Add to history index
         let history_index_key = "fee_history_index:all";
@@ -550,7 +580,8 @@ impl FeeStore {
             }
             let list_data = serde_json::to_vec(&history_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, history_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, history_index_key.as_bytes(), &list_data)?;
         }
 
         info!("Fee history stored: {} transactions", point.tx_count);
@@ -566,8 +597,15 @@ impl FeeStore {
     /// # Returns
     /// * `Ok(Vec<FeeHistoryPoint>)` - History points in range
     /// * `Err(Error)` if operation fails
-    pub fn get_fee_history(&self, from_timestamp: u64, to_timestamp: u64) -> Result<Vec<FeeHistoryPoint>> {
-        debug!("Getting fee history from {} to {}", from_timestamp, to_timestamp);
+    pub fn get_fee_history(
+        &self,
+        from_timestamp: u64,
+        to_timestamp: u64,
+    ) -> Result<Vec<FeeHistoryPoint>> {
+        debug!(
+            "Getting fee history from {} to {}",
+            from_timestamp, to_timestamp
+        );
 
         let history_timestamps = self.get_history_list()?;
         let mut result = Vec::new();
@@ -590,7 +628,10 @@ impl FeeStore {
     // Helper method to get history list
     fn get_history_list(&self) -> Result<Vec<u64>> {
         let history_index_key = "fee_history_index:all";
-        match self.db.get(CF_ACCOUNT_STATE, history_index_key.as_bytes())? {
+        match self
+            .db
+            .get(CF_ACCOUNT_STATE, history_index_key.as_bytes())?
+        {
             Some(data) => {
                 let list: Vec<u64> = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;

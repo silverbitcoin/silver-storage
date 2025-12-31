@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Peer information
@@ -229,11 +229,12 @@ impl NetworkStore {
         debug!("Storing peer info: {} ({})", peer.id, peer.addr);
 
         // Serialize peer info
-        let peer_data = serde_json::to_vec(peer)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let peer_data =
+            serde_json::to_vec(peer).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, peer.storage_key().as_bytes(), &peer_data)?;
+        self.db
+            .put(CF_ACCOUNT_STATE, peer.storage_key().as_bytes(), &peer_data)?;
 
         // Update cache
         self.peer_cache.write().insert(peer.id, peer.clone());
@@ -245,7 +246,8 @@ impl NetworkStore {
             peer_list.push(peer.id);
             let list_data = serde_json::to_vec(&peer_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, peer_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, peer_index_key.as_bytes(), &list_data)?;
         }
 
         // Invalidate stats cache
@@ -278,7 +280,7 @@ impl NetworkStore {
             Some(data) => {
                 let peer: PeerInfo = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
                 self.peer_cache.write().insert(peer_id, peer.clone());
                 Ok(Some(peer))
@@ -329,9 +331,10 @@ impl NetworkStore {
         let peer_index_key = "network:peer_index:all";
         let mut peer_list = self.get_peer_list()?;
         peer_list.retain(|&id| id != peer_id);
-        let list_data = serde_json::to_vec(&peer_list)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
-        self.db.put(CF_ACCOUNT_STATE, peer_index_key.as_bytes(), &list_data)?;
+        let list_data =
+            serde_json::to_vec(&peer_list).map_err(|e| Error::SerializationError(e.to_string()))?;
+        self.db
+            .put(CF_ACCOUNT_STATE, peer_index_key.as_bytes(), &list_data)?;
 
         // Invalidate stats cache
         *self.stats_cache.write() = None;
@@ -352,14 +355,17 @@ impl NetworkStore {
         debug!("Adding ban: {}", ban.address);
 
         // Serialize ban entry
-        let ban_data = serde_json::to_vec(ban)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
+        let ban_data =
+            serde_json::to_vec(ban).map_err(|e| Error::SerializationError(e.to_string()))?;
 
         // Store to database
-        self.db.put(CF_ACCOUNT_STATE, ban.storage_key().as_bytes(), &ban_data)?;
+        self.db
+            .put(CF_ACCOUNT_STATE, ban.storage_key().as_bytes(), &ban_data)?;
 
         // Update cache
-        self.ban_cache.write().insert(ban.address.clone(), ban.clone());
+        self.ban_cache
+            .write()
+            .insert(ban.address.clone(), ban.clone());
 
         // Add to ban index
         let ban_index_key = "network:ban_index:all";
@@ -368,7 +374,8 @@ impl NetworkStore {
             ban_list.push(ban.address.clone());
             let list_data = serde_json::to_vec(&ban_list)
                 .map_err(|e| Error::SerializationError(e.to_string()))?;
-            self.db.put(CF_ACCOUNT_STATE, ban_index_key.as_bytes(), &list_data)?;
+            self.db
+                .put(CF_ACCOUNT_STATE, ban_index_key.as_bytes(), &list_data)?;
         }
 
         // Invalidate stats cache
@@ -399,9 +406,10 @@ impl NetworkStore {
         let ban_index_key = "network:ban_index:all";
         let mut ban_list = self.get_ban_list()?;
         ban_list.retain(|a| a != address);
-        let list_data = serde_json::to_vec(&ban_list)
-            .map_err(|e| Error::SerializationError(e.to_string()))?;
-        self.db.put(CF_ACCOUNT_STATE, ban_index_key.as_bytes(), &list_data)?;
+        let list_data =
+            serde_json::to_vec(&ban_list).map_err(|e| Error::SerializationError(e.to_string()))?;
+        self.db
+            .put(CF_ACCOUNT_STATE, ban_index_key.as_bytes(), &list_data)?;
 
         // Invalidate stats cache
         *self.stats_cache.write() = None;
@@ -540,9 +548,11 @@ impl NetworkStore {
             Some(data) => {
                 let ban: BanEntry = serde_json::from_slice(&data)
                     .map_err(|e| Error::DeserializationError(e.to_string()))?;
-                
+
                 // Update cache
-                self.ban_cache.write().insert(address.to_string(), ban.clone());
+                self.ban_cache
+                    .write()
+                    .insert(address.to_string(), ban.clone());
                 Ok(Some(ban))
             }
             None => Ok(None),

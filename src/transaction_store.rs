@@ -125,24 +125,23 @@ impl TransactionStore {
     /// Store a transaction persistently using bincode 2.0 API
     pub fn store_transaction(&self, tx: &StoredTransaction) -> Result<()> {
         debug!("Storing transaction with digest: {}", tx.digest.to_hex());
-        
+
         // Serialize transaction using bincode 2.0 API
-        let tx_data = serde_json::to_vec(tx)
-            .map_err(crate::error::Error::Serialization)?;
-        
+        let tx_data = serde_json::to_vec(tx).map_err(crate::error::Error::Serialization)?;
+
         // Store by transaction digest as key
         let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
         self.db.put(CF_TRANSACTIONS, &key, &tx_data)?;
-        
+
         Ok(())
     }
 
     /// Get transaction by digest using bincode 2.0 API
     pub fn get_transaction(&self, digest: &TransactionDigest) -> Result<Option<StoredTransaction>> {
         debug!("Retrieving transaction with digest: {}", digest.to_hex());
-        
+
         let key = format!("tx:{}", digest.to_hex()).into_bytes();
-        
+
         match self.db.get(CF_TRANSACTIONS, &key)? {
             Some(data) => {
                 let tx = serde_json::from_slice::<StoredTransaction>(&data)
@@ -162,29 +161,28 @@ impl TransactionStore {
     /// Batch store multiple transactions atomically using bincode 2.0 API
     pub fn batch_store_transactions(&self, transactions: &[StoredTransaction]) -> Result<()> {
         debug!("Batch storing {} transactions", transactions.len());
-        
+
         let items: Result<Vec<_>> = transactions
             .iter()
             .map(|tx| {
                 let key = format!("tx:{}", tx.digest.to_hex()).into_bytes();
-                let value = serde_json::to_vec(tx)
-                    .map_err(crate::error::Error::Serialization)?;
+                let value = serde_json::to_vec(tx).map_err(crate::error::Error::Serialization)?;
                 Ok((key, value))
             })
             .collect();
-        
+
         self.db.batch_write(CF_TRANSACTIONS, &items?)?;
-        
+
         Ok(())
     }
 
     /// Delete a transaction
     pub fn delete_transaction(&self, digest: &TransactionDigest) -> Result<()> {
         debug!("Deleting transaction with digest: {}", digest.to_hex());
-        
+
         let key = format!("tx:{}", digest.to_hex()).into_bytes();
         self.db.delete(CF_TRANSACTIONS, &key)?;
-        
+
         Ok(())
     }
 
@@ -197,9 +195,9 @@ impl TransactionStore {
     /// Iterate all transactions using bincode 2.0 API
     pub fn iterate_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Iterating all transactions");
-        
+
         let mut transactions = Vec::new();
-        
+
         // Query the transaction index to get all transaction digests
         let tx_index_key = b"tx_index:all".to_vec();
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &tx_index_key) {
@@ -214,7 +212,7 @@ impl TransactionStore {
                 }
             }
         }
-        
+
         debug!("Iterated {} total transactions", transactions.len());
         Ok(transactions)
     }
@@ -222,11 +220,11 @@ impl TransactionStore {
     /// Get transactions by sender address using bincode 2.0 API
     pub fn get_transactions_by_sender(&self, sender: &[u8]) -> Result<Vec<StoredTransaction>> {
         debug!("Getting transactions by sender: {:?}", sender);
-        
+
         let mut transactions = Vec::new();
         let sender_hex = hex::encode(sender);
         let sender_index_key = format!("sender_index:{}", sender_hex).into_bytes();
-        
+
         // Query the sender_index for all transactions from this sender
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &sender_index_key) {
             if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
@@ -240,19 +238,26 @@ impl TransactionStore {
                 }
             }
         }
-        
-        debug!("Retrieved {} transactions from sender {:?}", transactions.len(), sender);
+
+        debug!(
+            "Retrieved {} transactions from sender {:?}",
+            transactions.len(),
+            sender
+        );
         Ok(transactions)
     }
 
     /// Get transactions by recipient address using bincode 2.0 API
-    pub fn get_transactions_by_recipient(&self, recipient: &[u8]) -> Result<Vec<StoredTransaction>> {
+    pub fn get_transactions_by_recipient(
+        &self,
+        recipient: &[u8],
+    ) -> Result<Vec<StoredTransaction>> {
         debug!("Getting transactions by recipient: {:?}", recipient);
-        
+
         let mut transactions = Vec::new();
         let recipient_hex = hex::encode(recipient);
         let recipient_index_key = format!("recipient_index:{}", recipient_hex).into_bytes();
-        
+
         // Query the recipient_index for all transactions to this recipient
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &recipient_index_key) {
             if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
@@ -266,18 +271,22 @@ impl TransactionStore {
                 }
             }
         }
-        
-        debug!("Retrieved {} transactions to recipient {:?}", transactions.len(), recipient);
+
+        debug!(
+            "Retrieved {} transactions to recipient {:?}",
+            transactions.len(),
+            recipient
+        );
         Ok(transactions)
     }
 
     /// Get pending transactions (not yet executed) using bincode 2.0 API
     pub fn get_pending_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Getting pending transactions");
-        
+
         let mut pending = Vec::new();
         let pending_index_key = b"pending_index:all".to_vec();
-        
+
         // Query the pending_index for all pending transactions
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &pending_index_key) {
             if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
@@ -293,7 +302,7 @@ impl TransactionStore {
                 }
             }
         }
-        
+
         debug!("Retrieved {} pending transactions", pending.len());
         Ok(pending)
     }
@@ -301,10 +310,10 @@ impl TransactionStore {
     /// Get failed transactions using bincode 2.0 API
     pub fn get_failed_transactions(&self) -> Result<Vec<StoredTransaction>> {
         debug!("Getting failed transactions");
-        
+
         let mut failed = Vec::new();
         let failed_index_key = b"failed_index:all".to_vec();
-        
+
         // Query the failed_index for all failed transactions
         if let Ok(Some(index_data)) = self.db.get(CF_TRANSACTIONS, &failed_index_key) {
             if let Ok(tx_digests) = serde_json::from_slice::<Vec<String>>(&index_data) {
@@ -320,7 +329,7 @@ impl TransactionStore {
                 }
             }
         }
-        
+
         debug!("Retrieved {} failed transactions", failed.len());
         Ok(failed)
     }

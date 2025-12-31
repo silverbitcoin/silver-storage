@@ -9,10 +9,10 @@
 
 use crate::db::{ParityDatabase, CF_ACCOUNT_STATE};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Timestamp index entry
@@ -119,7 +119,12 @@ impl AdvancedIndexManager {
     /// # Returns
     /// * `Ok(())` on success
     /// * `Err(Error)` if operation fails
-    pub fn add_timestamp_index(&self, index_type: &str, timestamp: u64, item_id: &str) -> Result<()> {
+    pub fn add_timestamp_index(
+        &self,
+        index_type: &str,
+        timestamp: u64,
+        item_id: &str,
+    ) -> Result<()> {
         debug!("Adding timestamp index: {} at {}", item_id, timestamp);
 
         let index = TimestampIndex {
@@ -129,7 +134,7 @@ impl AdvancedIndexManager {
 
         let key = index.storage_key(index_type);
         let mut existing_ids = self.get_timestamp_index_items(index_type, timestamp)?;
-        
+
         if !existing_ids.contains(&item_id.to_string()) {
             existing_ids.push(item_id.to_string());
             let data = serde_json::to_vec(&existing_ids)
@@ -196,7 +201,7 @@ impl AdvancedIndexManager {
 
         let key = index.storage_key();
         let mut existing_ids = self.get_fee_index_items(fee_rate)?;
-        
+
         if !existing_ids.contains(&tx_id.to_string()) {
             existing_ids.push(tx_id.to_string());
             let data = serde_json::to_vec(&existing_ids)
@@ -220,7 +225,10 @@ impl AdvancedIndexManager {
     /// * `Ok(Vec<String>)` - Transaction IDs in range
     /// * `Err(Error)` if operation fails
     pub fn query_by_fee_range(&self, min_fee: f64, max_fee: f64) -> Result<Vec<String>> {
-        debug!("Querying transactions by fee range: {} to {}", min_fee, max_fee);
+        debug!(
+            "Querying transactions by fee range: {} to {}",
+            min_fee, max_fee
+        );
 
         let mut result = Vec::new();
 
@@ -249,7 +257,10 @@ impl AdvancedIndexManager {
     /// * `Ok(())` on success
     /// * `Err(Error)` if operation fails
     pub fn add_confirmation_index(&self, confirmations: u64, tx_id: &str) -> Result<()> {
-        debug!("Adding confirmation index: {} with {} confirmations", tx_id, confirmations);
+        debug!(
+            "Adding confirmation index: {} with {} confirmations",
+            tx_id, confirmations
+        );
 
         let index = ConfirmationIndex {
             confirmations,
@@ -258,7 +269,7 @@ impl AdvancedIndexManager {
 
         let key = index.storage_key();
         let mut existing_ids = self.get_confirmation_index_items(confirmations)?;
-        
+
         if !existing_ids.contains(&tx_id.to_string()) {
             existing_ids.push(tx_id.to_string());
             let data = serde_json::to_vec(&existing_ids)
@@ -267,7 +278,9 @@ impl AdvancedIndexManager {
         }
 
         // Update cache
-        self.confirmation_cache.write().insert(confirmations, existing_ids);
+        self.confirmation_cache
+            .write()
+            .insert(confirmations, existing_ids);
 
         Ok(())
     }
@@ -322,7 +335,7 @@ impl AdvancedIndexManager {
 
         let key = index.storage_key();
         let mut existing_ids = self.get_script_type_index_items(script_type)?;
-        
+
         if !existing_ids.contains(&tx_id.to_string()) {
             existing_ids.push(tx_id.to_string());
             let data = serde_json::to_vec(&existing_ids)
@@ -350,7 +363,7 @@ impl AdvancedIndexManager {
     // Helper methods
     fn get_timestamp_index_items(&self, index_type: &str, timestamp: u64) -> Result<Vec<String>> {
         let key = format!("index:timestamp:{}:{}", index_type, timestamp);
-        
+
         // Check cache first
         if let Some(items) = self.timestamp_cache.read().get(&key) {
             return Ok(items.clone());
@@ -369,7 +382,7 @@ impl AdvancedIndexManager {
 
     fn get_fee_index_items(&self, fee_rate: f64) -> Result<Vec<String>> {
         let key = format!("index:fee_rate:{}", (fee_rate * 1000.0) as u64);
-        
+
         // Check cache first
         if let Some(items) = self.fee_cache.read().get(&key) {
             return Ok(items.clone());
@@ -406,7 +419,7 @@ impl AdvancedIndexManager {
 
     fn get_script_type_index_items(&self, script_type: &str) -> Result<Vec<String>> {
         let key = format!("index:script_type:{}", script_type);
-        
+
         // Query database
         match self.db.get(CF_ACCOUNT_STATE, key.as_bytes())? {
             Some(data) => {
